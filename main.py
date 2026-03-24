@@ -80,7 +80,7 @@ class HeatmapWidget(QWidget):
         # Colour map: low = dark blue, high = bright yellow/white
         cm = pg.colormap.get('CET-L9')
         self.bar = pg.ColorBarItem(values=(0, 15), colorMap=cm, label='Inductance (µH)')
-        self.bar.setImageItem(self.img, insert_in=self.plot_widget)
+        self.bar.setImageItem(self.img, insert_in=self.plot_widget.getPlotItem())
 
         layout.addWidget(self.plot_widget)
 
