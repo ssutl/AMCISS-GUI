@@ -25,6 +25,7 @@ from PyQt6.QtGui import QFont, QColor
 
 from buffer import DataBuffer
 from udp_listener import UDPListener, DummyGenerator
+from packet import raw_to_uh, SCALE_FACTOR_UH
 
 # ── Colour scheme ──────────────────────────────────────────────
 pg.setConfigOption('background', '#1e1e2e')
@@ -235,6 +236,15 @@ class SettingsPanel(QGroupBox):
         self.clear_btn = QPushButton('Clear Buffer')
         layout.addWidget(self.clear_btn, 6, 0, 1, 2)
 
+        layout.addWidget(QLabel('Scale factor (µH):'), 7, 0)
+        self.scale_spin = QDoubleSpinBox()
+        self.scale_spin.setRange(0.1, 10000.0)
+        self.scale_spin.setValue(SCALE_FACTOR_UH)
+        self.scale_spin.setDecimals(1)
+        self.scale_spin.setSingleStep(1.0)
+        self.scale_spin.setToolTip('Calibration: raw 65535 = this value in µH')
+        layout.addWidget(self.scale_spin, 7, 1)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -296,6 +306,8 @@ class MainWindow(QMainWindow):
             lambda v: self.buffer.set_duration(v))
         self.settings.refresh_spin.valueChanged.connect(
             lambda v: self.timer.setInterval(v))
+        self.settings.scale_spin.valueChanged.connect(
+            self._update_scale_factor)
 
     # ── Slots ──────────────────────────────────────────────────
 
@@ -328,8 +340,14 @@ class MainWindow(QMainWindow):
     def _clear_buffer(self):
         self.buffer.clear()
 
+    def _update_scale_factor(self, value: float):
+        import packet as pkt
+        pkt.SCALE_FACTOR_UH = value
+
     def _refresh_ui(self):
-        timestamps, readings = self.buffer.get_snapshot()
+        timestamps, raw_readings = self.buffer.get_snapshot()
+        # Convert raw uint16 -> µH using current scale factor
+        readings = raw_to_uh(raw_readings) if raw_readings.size > 0 else raw_readings
         connected = (self._listener is not None and self._listener.is_alive()) or \
                     (self._dummy is not None and self._dummy.is_alive())
         packets = self._listener.packets_received if self._listener else 0
