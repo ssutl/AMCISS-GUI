@@ -63,16 +63,20 @@ REFRESH_MS = 100  # UI refresh interval (ms)
 
 
 class HeatmapWidget(QWidget):
-    """LDC index (Y) vs time/distance (X) heatmap."""
+    """
+    Heatmap: X = LDC index (position across belt, 0..63)
+             Y = distance (m), derived from elapsed time x belt velocity
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.velocity_ms = 2.0  # m/s default, updated from settings panel
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.plot_widget = pg.PlotWidget(title='Heatmap — LDC vs Time')
-        self.plot_widget.setLabel('left', 'LDC Index')
-        self.plot_widget.setLabel('bottom', 'Time (s)')
+        self.plot_widget = pg.PlotWidget(title='Heatmap — LDC Position vs Distance')
+        self.plot_widget.setLabel('bottom', 'LDC Index (position across belt)')
+        self.plot_widget.setLabel('left', 'Distance (m)')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
 
         self.img = pg.ImageItem()
@@ -88,15 +92,21 @@ class HeatmapWidget(QWidget):
     def update(self, timestamps_ms: np.ndarray, readings: np.ndarray):
         if readings.size == 0:
             return
-        # readings shape: [N, 64], we want [64, N] for image (x=time, y=ldc)
+        # readings shape: [N, 64]
+        # Image axes: x = LDC index (0..63), y = distance (m)
+        # ImageItem expects data[x, y] so transpose: [64, N]
         img_data = readings.T.astype(np.float32)
+
+        # Convert time span to distance
         t0 = timestamps_ms[0] / 1000.0
         t1 = timestamps_ms[-1] / 1000.0
-        dt = (t1 - t0) / max(img_data.shape[1] - 1, 1)
+        total_distance = (t1 - t0) * self.velocity_ms  # metres
+
         self.img.setImage(img_data, autoLevels=False)
-        self.img.setRect(pg.QtCore.QRectF(t0, 0, t1 - t0 + dt, NUM_LDCS))
+        # rect(x, y, width, height): x=LDC axis, y=distance axis
+        self.img.setRect(pg.QtCore.QRectF(0, 0, NUM_LDCS, max(total_distance, 0.01)))
         vb = self.plot_widget.getViewBox()
-        vb.setRange(xRange=(t0, t1), yRange=(0, NUM_LDCS), padding=0)
+        vb.setRange(xRange=(0, NUM_LDCS), yRange=(0, max(total_distance, 0.1)), padding=0)
 
 
 class SingleLDCWidget(QWidget):
@@ -245,6 +255,15 @@ class SettingsPanel(QGroupBox):
         self.scale_spin.setToolTip('Calibration: raw 65535 = this value in µH')
         layout.addWidget(self.scale_spin, 7, 1)
 
+        layout.addWidget(QLabel('Belt velocity (m/s):'), 8, 0)
+        self.velocity_spin = QDoubleSpinBox()
+        self.velocity_spin.setRange(0.1, 10.0)
+        self.velocity_spin.setValue(2.0)
+        self.velocity_spin.setDecimals(2)
+        self.velocity_spin.setSingleStep(0.1)
+        self.velocity_spin.setToolTip('Used to convert time axis to distance on heatmap')
+        layout.addWidget(self.velocity_spin, 8, 1)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -308,6 +327,8 @@ class MainWindow(QMainWindow):
             lambda v: self.timer.setInterval(v))
         self.settings.scale_spin.valueChanged.connect(
             self._update_scale_factor)
+        self.settings.velocity_spin.valueChanged.connect(
+            lambda v: setattr(self.heatmap, 'velocity_ms', v))
 
     # ── Slots ──────────────────────────────────────────────────
 
