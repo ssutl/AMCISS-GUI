@@ -27,6 +27,10 @@ class DataBuffer:
                     self.dropped_packets += gap - 1
             self._last_seq = seq
             self._buffer.append((timestamp_ms, readings.copy()))
+        # Write to recorder if active (outside lock to avoid deadlock)
+        recorder = getattr(self, '_recorder', None)
+        if recorder and recorder.is_recording:
+            recorder.write(seq, timestamp_ms, readings)
 
     def get_snapshot(self):
         """Returns (timestamps_ms array, readings array [N x 64])."""

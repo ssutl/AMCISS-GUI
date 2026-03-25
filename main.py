@@ -26,6 +26,7 @@ from PyQt6.QtGui import QFont, QColor
 from buffer import DataBuffer
 from udp_listener import UDPListener, DummyGenerator
 from packet import raw_to_uh, SCALE_FACTOR_UH
+from recorder import Recorder
 
 # ── Colour scheme ──────────────────────────────────────────────
 pg.setConfigOption('background', '#1e1e2e')
@@ -246,6 +247,15 @@ class SettingsPanel(QGroupBox):
         self.clear_btn = QPushButton('Clear Buffer')
         layout.addWidget(self.clear_btn, 6, 0, 1, 2)
 
+        self.record_btn = QPushButton('⏺  Start Recording')
+        self.record_btn.setStyleSheet(f'border-color: {RED};')
+        layout.addWidget(self.record_btn, 9, 0, 1, 2)
+
+        self.record_label = QLabel('Not recording')
+        self.record_label.setStyleSheet(f'color: #6c7086; font-size: 10px;')
+        self.record_label.setWordWrap(True)
+        layout.addWidget(self.record_label, 10, 0, 1, 2)
+
         layout.addWidget(QLabel('Scale factor (µH):'), 7, 0)
         self.scale_spin = QDoubleSpinBox()
         self.scale_spin.setRange(0.1, 10000.0)
@@ -273,7 +283,9 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(STYLE)
 
         # Data layer
+        self._recorder = Recorder(output_dir='recordings')
         self.buffer = DataBuffer(duration_s=60.0)
+        self.buffer._recorder = self._recorder  # inject recorder into buffer
         self._listener = None
         self._dummy = None
 
@@ -329,6 +341,7 @@ class MainWindow(QMainWindow):
             self._update_scale_factor)
         self.settings.velocity_spin.valueChanged.connect(
             lambda v: setattr(self.heatmap, 'velocity_ms', v))
+        self.settings.record_btn.clicked.connect(self._toggle_recording)
 
     # ── Slots ──────────────────────────────────────────────────
 
@@ -361,6 +374,20 @@ class MainWindow(QMainWindow):
     def _clear_buffer(self):
         self.buffer.clear()
 
+    def _toggle_recording(self):
+        if self._recorder.is_recording:
+            count = self._recorder.stop()
+            self.settings.record_btn.setText('⏺  Start Recording')
+            self.settings.record_btn.setStyleSheet(f'border-color: {RED};')
+            self.settings.record_label.setText(f'Saved {count} samples\n{self._recorder.current_filename}')
+            self.settings.record_label.setStyleSheet(f'color: {GREEN}; font-size: 10px;')
+        else:
+            filename = self._recorder.start()
+            self.settings.record_btn.setText('⏹  Stop Recording')
+            self.settings.record_btn.setStyleSheet(f'background: {RED}; color: white; border-color: {RED};')
+            self.settings.record_label.setText(f'Recording...\n{filename}')
+            self.settings.record_label.setStyleSheet(f'color: {RED}; font-size: 10px;')
+
     def _update_scale_factor(self, value: float):
         import packet as pkt
         pkt.SCALE_FACTOR_UH = value
@@ -369,6 +396,11 @@ class MainWindow(QMainWindow):
         timestamps, raw_readings = self.buffer.get_snapshot()
         # Convert raw uint16 -> µH using current scale factor
         readings = raw_to_uh(raw_readings) if raw_readings.size > 0 else raw_readings
+
+        # Update recording sample count label
+        if self._recorder.is_recording:
+            self.settings.record_label.setText(
+                f'Recording... {self._recorder.sample_count} samples\n{self._recorder.current_filename}')
         connected = (self._listener is not None and self._listener.is_alive()) or \
                     (self._dummy is not None and self._dummy.is_alive())
         packets = self._listener.packets_received if self._listener else 0
@@ -388,6 +420,8 @@ class MainWindow(QMainWindow):
             self.heatmap.update(timestamps, readings)
 
     def closeEvent(self, event):
+        if self._recorder.is_recording:
+            self._recorder.stop()
         if self._listener:
             self._listener.stop()
         if self._dummy:
