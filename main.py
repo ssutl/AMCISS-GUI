@@ -427,10 +427,8 @@ class MainWindow(QMainWindow):
             y_label = 'Inductance (µH)'
             cbar_label = 'Inductance (µH)'
 
-        # Update axis labels
+        # Update axis label on trace plot
         self.single_ldc.plot_widget.setLabel('left', y_label)
-        self.heatmap.plot_widget.setLabel('left', 'Distance (m)')
-        self.heatmap.bar.setLabel(cbar_label)
 
         current_tab = self.tabs.currentIndex()
         if current_tab == 0:
