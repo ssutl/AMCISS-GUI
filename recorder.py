@@ -4,9 +4,12 @@ AMCISS Data Recorder
 Records LDC readings to CSV for offline signal processing.
 
 CSV format:
-  timestamp_ms, ldc0_raw, ldc1_raw, ..., ldc63_raw, ldc0_uh, ldc1_uh, ..., ldc63_uh
+  timestamp_ms, seq,
+  ldc0_raw .. ldc63_raw,
+  ldc0_uh  .. ldc63_uh,
+  rp0_raw  .. rp63_raw
 
-Each row = one UDP packet (one full scan of all 64 LDCs).
+Each row = one UDP packet (one full scan of all 64 channels).
 """
 
 import csv
@@ -43,25 +46,33 @@ class Recorder:
             self._writer = csv.writer(self._file)
 
             # Header row
-            raw_headers = [f'ldc{i}_raw' for i in range(NUM_LDCS)]
-            uh_headers  = [f'ldc{i}_uh'  for i in range(NUM_LDCS)]
-            self._writer.writerow(['timestamp_ms', 'seq'] + raw_headers + uh_headers)
+            l_raw_headers = [f'ldc{i}_raw' for i in range(NUM_LDCS)]
+            l_uh_headers  = [f'ldc{i}_uh'  for i in range(NUM_LDCS)]
+            rp_raw_headers = [f'rp{i}_raw' for i in range(NUM_LDCS)]
+            self._writer.writerow(
+                ['timestamp_ms', 'seq'] + l_raw_headers + l_uh_headers + rp_raw_headers
+            )
 
             self._recording = True
             self._sample_count = 0
             print(f'[Recorder] Started: {filename}')
             return self.current_filename
 
-    def write(self, seq: int, timestamp_ms: int, raw_readings: np.ndarray):
+    def write(self, seq: int, timestamp_ms: int,
+              l_readings: np.ndarray, rp_readings: np.ndarray):
         """Write one packet to CSV. Call from any thread."""
         with self._lock:
             if not self._recording or self._writer is None:
                 return
-            uh = raw_to_uh(raw_readings)
-            row = [timestamp_ms, seq] + raw_readings.tolist() + [f'{v:.4f}' for v in uh.tolist()]
+            uh = raw_to_uh(l_readings)
+            row = (
+                [timestamp_ms, seq]
+                + l_readings.tolist()
+                + [f'{v:.4f}' for v in uh.tolist()]
+                + rp_readings.tolist()
+            )
             self._writer.writerow(row)
             self._sample_count += 1
-            # Flush every 50 samples so data isn't lost on crash
             if self._sample_count % 50 == 0:
                 self._file.flush()
 

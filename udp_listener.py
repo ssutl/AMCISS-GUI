@@ -1,6 +1,6 @@
 """
 UDP listener thread.
-Receives packets, decodes them, pushes raw uint16 readings to DataBuffer.
+Receives packets, decodes them, pushes raw uint16 L and RP readings to DataBuffer.
 Also supports a dummy data generator for testing without hardware.
 """
 
@@ -40,8 +40,8 @@ class UDPListener(threading.Thread):
                 raw, _ = sock.recvfrom(PACKET_SIZE + 64)
                 result = decode_packet(raw)
                 if result:
-                    seq, ts, readings = result
-                    self.buffer.push(seq, ts, readings)
+                    seq, ts, l_readings, rp_readings = result
+                    self.buffer.push(seq, ts, l_readings, rp_readings)
                     self.packets_received += 1
                 else:
                     self.packets_invalid += 1
@@ -59,6 +59,7 @@ class DummyGenerator(threading.Thread):
     """
     Generates fake raw uint16 sensor data for UI testing without hardware.
     Simulates a metal object sweeping across all 64 LDCs periodically.
+    L increases and RP decreases where the metal object is detected.
     """
     def __init__(self, buffer: DataBuffer, rate_hz: float = 50.0):
         super().__init__(daemon=True, name='DummyGenerator')
@@ -71,13 +72,18 @@ class DummyGenerator(threading.Thread):
     def run(self):
         interval = 1.0 / self.rate_hz
         print(f'[Dummy] Generating fake data at {self.rate_hz} Hz')
-        # Baseline inductance ~40% of full scale
-        BASELINE = int(0.4 * 65535)
-        PEAK_DELTA = int(0.25 * 65535)   # metal raises reading by 25%
+
+        L_BASELINE   = int(0.4  * 65535)
+        L_PEAK_DELTA = int(0.25 * 65535)   # metal raises L reading by 25%
+
+        RP_BASELINE   = int(0.6  * 65535)
+        RP_DIP_DELTA  = int(0.3  * 65535)  # metal lowers RP reading by 30%
 
         while not self._stop_event.is_set():
             t_ms = int((time.time() - self._t0) * 1000)
-            readings = np.full(64, BASELINE, dtype=np.uint16)
+
+            l_readings  = np.full(64, L_BASELINE,  dtype=np.uint16)
+            rp_readings = np.full(64, RP_BASELINE, dtype=np.uint16)
 
             # Simulate metal object sweeping across belt every 8s
             t_norm = (t_ms % 8000) / 8000.0
@@ -85,14 +91,16 @@ class DummyGenerator(threading.Thread):
             for i in range(64):
                 dist = abs(i - center)
                 if dist < 8:
-                    delta = int(PEAK_DELTA * np.exp(-dist ** 2 / 10.0))
-                    readings[i] = min(65535, BASELINE + delta)
+                    weight = np.exp(-dist ** 2 / 10.0)
+                    l_readings[i]  = min(65535, L_BASELINE  + int(L_PEAK_DELTA  * weight))
+                    rp_readings[i] = max(0,     RP_BASELINE - int(RP_DIP_DELTA  * weight))
 
-            # Add a little noise
+            # Add noise
             noise = np.random.randint(-200, 200, 64)
-            readings = np.clip(readings.astype(np.int32) + noise, 0, 65535).astype(np.uint16)
+            l_readings  = np.clip(l_readings.astype(np.int32)  + noise, 0, 65535).astype(np.uint16)
+            rp_readings = np.clip(rp_readings.astype(np.int32) + noise, 0, 65535).astype(np.uint16)
 
-            self.buffer.push(self._seq, t_ms, readings)
+            self.buffer.push(self._seq, t_ms, l_readings, rp_readings)
             self._seq = (self._seq + 1) & 0xFFFF
             time.sleep(interval)
 

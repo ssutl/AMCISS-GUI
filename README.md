@@ -34,7 +34,9 @@ The default port is **5005**. To change it, update the **UDP Port** field in the
 
 Send UDP packets to the PC's IP address on port **5005** (or whichever port is set in the GUI).
 
-Each packet must be **exactly 136 bytes**, matching this C struct:
+The packet always carries both L (inductance) and RP (parallel resistance) — configure the LDC1101 in **RP+L mode** so both are available each conversion cycle. If RP is unavailable, send zeros for the `rp[]` array.
+
+Each packet must be **exactly 264 bytes**, matching this C struct:
 
 ```c
 #pragma pack(push, 1)
@@ -42,8 +44,9 @@ typedef struct {
     uint8_t  magic[2];      // 0xAA, 0xBB  (required — packet is dropped if wrong)
     uint16_t seq;           // sequence number, wraps at 65535
     uint32_t timestamp_ms;  // HAL_GetTick()
-    uint16_t ldc[64];       // raw uint16 readings — ldc[0..31] = DCM0, ldc[32..63] = DCM1
-} AMCISS_Packet_t;          // sizeof = 136
+    uint16_t ldc[64];       // raw L register values — ldc[0..31] = DCM0, ldc[32..63] = DCM1
+    uint16_t rp[64];        // raw RP register values — rp[0..31] = DCM0, rp[32..63] = DCM1
+} AMCISS_Packet_t;          // sizeof = 264
 #pragma pack(pop)
 ```
 
@@ -55,7 +58,8 @@ pkt.magic[0]     = 0xAA;
 pkt.magic[1]     = 0xBB;
 pkt.seq          = seq++;
 pkt.timestamp_ms = HAL_GetTick();
-// fill pkt.ldc[0..63] with ADC readings
+// fill pkt.ldc[0..63] with L register readings
+// fill pkt.rp[0..63]  with RP register readings
 udp_send((uint8_t*)&pkt, sizeof(pkt));
 ```
 
