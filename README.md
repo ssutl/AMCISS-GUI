@@ -7,7 +7,7 @@ Real-time visualisation of inductance readings from the STM32 over UDP.
 ## Setup & Run
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/ssutl/AMCISS-GUI
 cd amciss-gui
 python -m venv venv
 venv\Scripts\activate
