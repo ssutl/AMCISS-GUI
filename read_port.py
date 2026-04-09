@@ -2,7 +2,7 @@
 AMCISS UDP Diagnostic Tool
 ===========================
 Listens on the same UDP port as the main app and prints every incoming packet
-as raw hex + a decoded summary of the 136-byte AMCISS binary packet.
+as raw hex + a decoded summary of the 264-byte AMCISS binary packet.
 
 Run this INSTEAD of main.py to verify the hardware is transmitting correctly
 before connecting the full GUI.
@@ -39,11 +39,12 @@ while True:
 
     result = decode_packet(data)
     if result:
-        seq, ts_ms, raw = result
-        uh = raw_to_uh(raw)
+        seq, ts_ms, l_raw, rp_raw = result
+        uh = raw_to_uh(l_raw)
         print(f'  ok   seq={seq}  ts={ts_ms} ms')
-        print(f'  LDC  min={raw.min()} max={raw.max()} raw  '
+        print(f'  L    min={l_raw.min()} max={l_raw.max()} raw  '
               f'({uh.min():.2f}–{uh.max():.2f} µH)')
+        print(f'  RP   min={rp_raw.min()} max={rp_raw.max()} raw')
     else:
         print(f'  WARN: not a valid {PACKET_SIZE}-byte AMCISS packet '
               f'(magic mismatch or wrong size)')

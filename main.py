@@ -236,43 +236,48 @@ class SettingsPanel(QGroupBox):
         self.refresh_spin.setValue(REFRESH_MS)
         layout.addWidget(self.refresh_spin, 3, 1)
 
+        layout.addWidget(QLabel('View:'), 4, 0)
+        self.view_combo = QComboBox()
+        self.view_combo.addItems(['L — Inductance (µH)', 'RP — Resistance (raw)'])
+        layout.addWidget(self.view_combo, 4, 1)
+
         self.dummy_btn = QPushButton('Start Dummy Data')
         self.dummy_btn.setStyleSheet(f'border-color: {YELLOW};')
-        layout.addWidget(self.dummy_btn, 4, 0, 1, 2)
+        layout.addWidget(self.dummy_btn, 5, 0, 1, 2)
 
         self.connect_btn = QPushButton('Connect UDP')
         self.connect_btn.setStyleSheet(f'border-color: {GREEN};')
-        layout.addWidget(self.connect_btn, 5, 0, 1, 2)
+        layout.addWidget(self.connect_btn, 6, 0, 1, 2)
 
         self.clear_btn = QPushButton('Clear Buffer')
-        layout.addWidget(self.clear_btn, 6, 0, 1, 2)
+        layout.addWidget(self.clear_btn, 7, 0, 1, 2)
 
         self.record_btn = QPushButton('⏺  Start Recording')
         self.record_btn.setStyleSheet(f'border-color: {RED};')
-        layout.addWidget(self.record_btn, 9, 0, 1, 2)
+        layout.addWidget(self.record_btn, 10, 0, 1, 2)
 
         self.record_label = QLabel('Not recording')
         self.record_label.setStyleSheet(f'color: #6c7086; font-size: 10px;')
         self.record_label.setWordWrap(True)
-        layout.addWidget(self.record_label, 10, 0, 1, 2)
+        layout.addWidget(self.record_label, 11, 0, 1, 2)
 
-        layout.addWidget(QLabel('Scale factor (µH):'), 7, 0)
+        layout.addWidget(QLabel('Scale factor (µH):'), 8, 0)
         self.scale_spin = QDoubleSpinBox()
         self.scale_spin.setRange(0.1, 10000.0)
         self.scale_spin.setValue(SCALE_FACTOR_UH)
         self.scale_spin.setDecimals(1)
         self.scale_spin.setSingleStep(1.0)
         self.scale_spin.setToolTip('Calibration: raw 65535 = this value in µH')
-        layout.addWidget(self.scale_spin, 7, 1)
+        layout.addWidget(self.scale_spin, 8, 1)
 
-        layout.addWidget(QLabel('Belt velocity (m/s):'), 8, 0)
+        layout.addWidget(QLabel('Belt velocity (m/s):'), 9, 0)
         self.velocity_spin = QDoubleSpinBox()
         self.velocity_spin.setRange(0.1, 10.0)
         self.velocity_spin.setValue(2.0)
         self.velocity_spin.setDecimals(2)
         self.velocity_spin.setSingleStep(0.1)
         self.velocity_spin.setToolTip('Used to convert time axis to distance on heatmap')
-        layout.addWidget(self.velocity_spin, 8, 1)
+        layout.addWidget(self.velocity_spin, 9, 1)
 
 
 class MainWindow(QMainWindow):
@@ -393,9 +398,7 @@ class MainWindow(QMainWindow):
         pkt.SCALE_FACTOR_UH = value
 
     def _refresh_ui(self):
-        timestamps, raw_readings = self.buffer.get_snapshot()
-        # Convert raw uint16 -> µH using current scale factor
-        readings = raw_to_uh(raw_readings) if raw_readings.size > 0 else raw_readings
+        timestamps, l_raw, rp_raw = self.buffer.get_snapshot()
 
         # Update recording sample count label
         if self._recorder.is_recording:
@@ -410,8 +413,24 @@ class MainWindow(QMainWindow):
 
         self.status_bar.update_stats(connected, packets, dropped, self.buffer.sample_count)
 
-        if readings.size == 0:
+        if l_raw.size == 0:
             return
+
+        # Select dataset based on view toggle
+        view_rp = self.settings.view_combo.currentIndex() == 1
+        if view_rp:
+            readings = rp_raw.astype(np.float32)
+            y_label = 'RP (raw)'
+            cbar_label = 'RP (raw)'
+        else:
+            readings = raw_to_uh(l_raw)
+            y_label = 'Inductance (µH)'
+            cbar_label = 'Inductance (µH)'
+
+        # Update axis labels
+        self.single_ldc.plot_widget.setLabel('left', y_label)
+        self.heatmap.plot_widget.setLabel('left', 'Distance (m)')
+        self.heatmap.bar.setLabel(cbar_label)
 
         current_tab = self.tabs.currentIndex()
         if current_tab == 0:
