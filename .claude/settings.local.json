@@ -1,4 +1,11 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(python -c ':*)",
+      "Bash(venv/Scripts/python -c ':*)"
+    ]
+  },
   "disabledMcpjsonServers": [
     "supabase"
   ]

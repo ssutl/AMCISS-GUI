@@ -85,8 +85,9 @@ class HeatmapWidget(QWidget):
 
         # Colour map: low = dark blue, high = bright yellow/white
         cm = pg.colormap.get('CET-L9')
-        self.bar = pg.ColorBarItem(values=(0, 15), colorMap=cm, label='Inductance (µH)')
+        self.bar = pg.ColorBarItem(values=(0, 50), colorMap=cm, label='Inductance (µH)')
         self.bar.setImageItem(self.img, insert_in=self.plot_widget.getPlotItem())
+        self._levels = (0.0, 50.0)
 
         layout.addWidget(self.plot_widget)
 
@@ -103,7 +104,13 @@ class HeatmapWidget(QWidget):
         t1 = timestamps_ms[-1] / 1000.0
         total_distance = (t1 - t0) * self.velocity_ms  # metres
 
-        self.img.setImage(img_data, autoLevels=False)
+        # Compute levels from data so the heatmap is always visible
+        lo = float(np.percentile(img_data, 2))
+        hi = float(np.percentile(img_data, 98))
+        if hi <= lo:
+            hi = lo + 1.0
+        self._levels = (lo, hi)
+        self.img.setImage(img_data, autoLevels=False, levels=self._levels)
         # rect(x, y, width, height): x=LDC axis, y=distance axis
         self.img.setRect(pg.QtCore.QRectF(0, 0, NUM_LDCS, max(total_distance, 0.01)))
         vb = self.plot_widget.getViewBox()
