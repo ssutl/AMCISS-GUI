@@ -12,6 +12,7 @@ Layout:
 """
 
 import sys
+import traceback
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtWidgets import (
@@ -159,9 +160,9 @@ class LDCGridWidget(QWidget):
                 row = i // 16
                 col = i % 16
                 btn = QPushButton(str(ldc_idx))
-                btn.setMinimumSize(28, 20)
+                btn.setMinimumSize(0, 20)
                 btn.setMaximumHeight(24)
-                btn.setFont(QFont('Segoe UI', 7))
+                btn.setFont(QFont('Segoe UI', 6))
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 btn.clicked.connect(
@@ -202,6 +203,7 @@ class LDCGridWidget(QWidget):
         range_row.addWidget(clear_btn)
 
         outer.addLayout(range_row)
+        self.selected.add(0)
         self._update_styles()
 
     def _toggle(self, idx: int):
@@ -553,17 +555,18 @@ class MainWindow(QMainWindow):
             y_label = 'Inductance (µH)'
             cbar_label = 'Inductance (µH)'
 
-        # Update axis label on trace plot
-        self.single_ldc.plot_widget.setLabel('left', y_label)
-
         current_tab = self.tabs.currentIndex()
         try:
+            self.single_ldc.plot_widget.setLabel('left', y_label)
             if current_tab == 0:
                 self.single_ldc.refresh_plot(timestamps, readings)
             elif current_tab == 1:
                 self.heatmap.refresh_plot(timestamps, readings)
         except Exception as e:
-            print(f'[UI] refresh error: {e}')
+            msg = f'[UI] refresh error: {e}'
+            print(msg)
+            traceback.print_exc()
+            self.setWindowTitle(f'AMCISS — ERROR: {e}')
 
     def closeEvent(self, event):
         if self._recorder.is_recording:
