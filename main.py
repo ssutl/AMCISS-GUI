@@ -17,8 +17,8 @@ import pyqtgraph as pg
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QGroupBox, QCheckBox, QLineEdit, QSlider, QSplitter,
-    QStatusBar, QTabWidget, QGridLayout, QListWidget, QListWidgetItem
+    QGroupBox, QLineEdit, QSplitter, QStatusBar, QTabWidget,
+    QGridLayout, QFrame, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -91,7 +91,7 @@ class HeatmapWidget(QWidget):
 
         layout.addWidget(self.plot_widget)
 
-    def update(self, timestamps_ms: np.ndarray, readings: np.ndarray):
+    def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray):
         if readings.size == 0:
             return
         # readings shape: [N, 64]
@@ -111,37 +111,162 @@ class HeatmapWidget(QWidget):
             hi = lo + 1.0
         self._levels = (lo, hi)
         self.img.setImage(img_data, autoLevels=False, levels=self._levels)
+        self.bar.setLevels((lo, hi))
         # rect(x, y, width, height): x=LDC axis, y=distance axis
         self.img.setRect(pg.QtCore.QRectF(0, 0, NUM_LDCS, max(total_distance, 0.01)))
         vb = self.plot_widget.getViewBox()
         vb.setRange(xRange=(0, NUM_LDCS), yRange=(0, max(total_distance, 0.1)), padding=0)
 
 
+class LDCGridWidget(QWidget):
+    """
+    Visual PCB layout — two DCMs side by side, each 2 rows × 16 LDCs.
+      DCM0: LDCs  0-15 (top row),  16-31 (bottom row)
+      DCM1: LDCs 32-47 (top row),  48-63 (bottom row)
+    Click to toggle. Range entry for bulk selection (0-based, e.g. '0-11, 32, 50-55').
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected: set[int] = set()
+        self._buttons: list[QPushButton] = [None] * NUM_LDCS
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 2, 0, 2)
+        outer.setSpacing(3)
+
+        # ── Two DCM blocks side by side ──────────────────────────
+        grids_row = QHBoxLayout()
+        grids_row.setSpacing(0)
+
+        for dcm in range(2):
+            base = dcm * 32
+            block = QVBoxLayout()
+            block.setSpacing(2)
+
+            lbl = QLabel(f'DCM{dcm}')
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet(
+                f'color: {ACCENT}; font-weight: bold; font-size: 10px; padding: 1px;')
+            block.addWidget(lbl)
+
+            g = QGridLayout()
+            g.setSpacing(2)
+            g.setContentsMargins(4, 0, 4, 0)
+
+            for i in range(32):
+                ldc_idx = base + i
+                row = i // 16
+                col = i % 16
+                btn = QPushButton(str(ldc_idx))
+                btn.setMinimumSize(28, 20)
+                btn.setMaximumHeight(24)
+                btn.setFont(QFont('Segoe UI', 7))
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                btn.clicked.connect(
+                    lambda checked, idx=ldc_idx: self._toggle(idx))
+                g.addWidget(btn, row, col)
+                self._buttons[ldc_idx] = btn
+
+            block.addLayout(g)
+            grids_row.addLayout(block, stretch=1)
+
+            if dcm == 0:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.Shape.VLine)
+                sep.setFixedWidth(2)
+                sep.setStyleSheet(f'background: {SURFACE};')
+                grids_row.addWidget(sep)
+
+        outer.addLayout(grids_row)
+
+        # ── Range input row ──────────────────────────────────────
+        range_row = QHBoxLayout()
+        range_row.setSpacing(4)
+        range_row.addWidget(QLabel('Select:'))
+        self._range_edit = QLineEdit()
+        self._range_edit.setPlaceholderText('e.g. 0-11, 32, 50-55')
+        self._range_edit.setFixedHeight(24)
+        self._range_edit.returnPressed.connect(self._apply_range)
+        range_row.addWidget(self._range_edit, stretch=1)
+
+        add_btn = QPushButton('Add')
+        add_btn.setFixedWidth(50)
+        add_btn.clicked.connect(self._apply_range)
+        range_row.addWidget(add_btn)
+
+        clear_btn = QPushButton('Clear')
+        clear_btn.setFixedWidth(50)
+        clear_btn.clicked.connect(self._clear_all)
+        range_row.addWidget(clear_btn)
+
+        outer.addLayout(range_row)
+        self._update_styles()
+
+    def _toggle(self, idx: int):
+        if idx in self.selected:
+            self.selected.discard(idx)
+        else:
+            self.selected.add(idx)
+        self._update_styles()
+
+    def _apply_range(self):
+        text = self._range_edit.text().strip()
+        for part in text.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            if '-' in part:
+                halves = part.split('-', 1)
+                try:
+                    a, b = int(halves[0]), int(halves[1])
+                    for i in range(min(a, b), max(a, b) + 1):
+                        if 0 <= i < NUM_LDCS:
+                            self.selected.add(i)
+                except ValueError:
+                    pass
+            else:
+                try:
+                    i = int(part)
+                    if 0 <= i < NUM_LDCS:
+                        self.selected.add(i)
+                except ValueError:
+                    pass
+        self._range_edit.clear()
+        self._update_styles()
+
+    def _clear_all(self):
+        self.selected.clear()
+        self._range_edit.clear()
+        self._update_styles()
+
+    def _update_styles(self):
+        for i, btn in enumerate(self._buttons):
+            if btn is None:
+                continue
+            if i in self.selected:
+                btn.setStyleSheet(
+                    f'background: {ACCENT}; color: {BASE};'
+                    f' border: none; border-radius: 2px;')
+            else:
+                btn.setStyleSheet(
+                    f'background: {SURFACE}; color: {TEXT};'
+                    f' border: none; border-radius: 2px;')
+
+
 class SingleLDCWidget(QWidget):
-    """Live trace for one or more selected LDCs."""
+    """Live trace for LDCs selected via the grid."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
 
-        # Controls row
-        ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel('LDC:'))
-        self.ldc_spin = QSpinBox()
-        self.ldc_spin.setRange(0, NUM_LDCS - 1)
-        self.ldc_spin.setValue(0)
-        ctrl.addWidget(self.ldc_spin)
-        ctrl.addWidget(QLabel('  Multi-select:'))
-        self.multi_list = QListWidget()
-        self.multi_list.setMaximumHeight(70)
-        self.multi_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        for i in range(NUM_LDCS):
-            self.multi_list.addItem(QListWidgetItem(f'LDC {i}'))
-        ctrl.addWidget(self.multi_list, stretch=1)
-        layout.addLayout(ctrl)
+        self.grid = LDCGridWidget()
+        layout.addWidget(self.grid)
 
-        # Plot
         self.plot_widget = pg.PlotWidget(title='LDC Inductance vs Time')
         self.plot_widget.setLabel('left', 'Inductance (µH)')
         self.plot_widget.setLabel('bottom', 'Time (s)')
@@ -152,18 +277,12 @@ class SingleLDCWidget(QWidget):
         self._curves = {}
         self._colours = [ACCENT, GREEN, RED, YELLOW, '#cba6f7', '#fab387', '#94e2d5']
 
-    def update(self, timestamps_ms: np.ndarray, readings: np.ndarray):
+    def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray):
         if readings.size == 0:
             return
         t = timestamps_ms / 1000.0
+        indices = sorted(self.grid.selected)
 
-        # Selected from multi-list
-        selected = [i.row() for i in self.multi_list.selectedIndexes()]
-        # Always include the spinner LDC
-        primary = self.ldc_spin.value()
-        indices = list(dict.fromkeys([primary] + selected))  # deduplicated, primary first
-
-        # Remove curves no longer needed
         for key in list(self._curves.keys()):
             if key not in indices:
                 self.plot_widget.removeItem(self._curves.pop(key))
@@ -438,10 +557,13 @@ class MainWindow(QMainWindow):
         self.single_ldc.plot_widget.setLabel('left', y_label)
 
         current_tab = self.tabs.currentIndex()
-        if current_tab == 0:
-            self.single_ldc.update(timestamps, readings)
-        elif current_tab == 1:
-            self.heatmap.update(timestamps, readings)
+        try:
+            if current_tab == 0:
+                self.single_ldc.refresh_plot(timestamps, readings)
+            elif current_tab == 1:
+                self.heatmap.refresh_plot(timestamps, readings)
+        except Exception as e:
+            print(f'[UI] refresh error: {e}')
 
     def closeEvent(self, event):
         if self._recorder.is_recording:
