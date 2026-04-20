@@ -80,28 +80,31 @@ class DummyGenerator(threading.Thread):
         RP_DIP_DELTA  = int(0.3  * 65535)  # metal lowers RP reading by 30%
 
         while not self._stop_event.is_set():
-            t_ms = int((time.time() - self._t0) * 1000)
+            try:
+                t_ms = int((time.time() - self._t0) * 1000)
 
-            l_readings  = np.full(64, L_BASELINE,  dtype=np.uint16)
-            rp_readings = np.full(64, RP_BASELINE, dtype=np.uint16)
+                l_readings  = np.full(64, L_BASELINE,  dtype=np.uint16)
+                rp_readings = np.full(64, RP_BASELINE, dtype=np.uint16)
 
-            # Simulate metal object sweeping across belt every 8s
-            t_norm = (t_ms % 8000) / 8000.0
-            center = t_norm * 64
-            for i in range(64):
-                dist = abs(i - center)
-                if dist < 8:
-                    weight = np.exp(-dist ** 2 / 10.0)
-                    l_readings[i]  = min(65535, L_BASELINE  + int(L_PEAK_DELTA  * weight))
-                    rp_readings[i] = max(0,     RP_BASELINE - int(RP_DIP_DELTA  * weight))
+                # Simulate metal object sweeping across belt every 8s
+                t_norm = (t_ms % 8000) / 8000.0
+                center = t_norm * 64
+                for i in range(64):
+                    dist = abs(i - center)
+                    if dist < 8:
+                        weight = np.exp(-dist ** 2 / 10.0)
+                        l_readings[i]  = min(65535, L_BASELINE  + int(L_PEAK_DELTA  * weight))
+                        rp_readings[i] = max(0,     RP_BASELINE - int(RP_DIP_DELTA  * weight))
 
-            # Add noise
-            noise = np.random.randint(-200, 200, 64)
-            l_readings  = np.clip(l_readings.astype(np.int32)  + noise, 0, 65535).astype(np.uint16)
-            rp_readings = np.clip(rp_readings.astype(np.int32) + noise, 0, 65535).astype(np.uint16)
+                # Add noise
+                noise = np.random.randint(-200, 200, 64)
+                l_readings  = np.clip(l_readings.astype(np.int32)  + noise, 0, 65535).astype(np.uint16)
+                rp_readings = np.clip(rp_readings.astype(np.int32) + noise, 0, 65535).astype(np.uint16)
 
-            self.buffer.push(self._seq, t_ms, l_readings, rp_readings)
-            self._seq = (self._seq + 1) & 0xFFFF
+                self.buffer.push(self._seq, t_ms, l_readings, rp_readings)
+                self._seq = (self._seq + 1) & 0xFFFF
+            except Exception as e:
+                print(f'[Dummy] loop error: {e}')
             time.sleep(interval)
 
     def stop(self):
