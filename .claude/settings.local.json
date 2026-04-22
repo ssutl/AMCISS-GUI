@@ -3,7 +3,11 @@
     "allow": [
       "Bash(ls:*)",
       "Bash(python -c ':*)",
-      "Bash(venv/Scripts/python -c ':*)"
+      "Bash(venv/Scripts/python -c ':*)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(venv/Scripts/python.exe *)"
     ]
   },
   "disabledMcpjsonServers": [

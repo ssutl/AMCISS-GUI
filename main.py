@@ -88,35 +88,34 @@ class HeatmapWidget(QWidget):
         cm = pg.colormap.get('CET-L9')
         self.bar = pg.ColorBarItem(values=(0, 50), colorMap=cm, label='Inductance (µH)')
         self.bar.setImageItem(self.img, insert_in=self.plot_widget.getPlotItem())
-        self._levels = (0.0, 50.0)
 
         layout.addWidget(self.plot_widget)
 
-    def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray):
+    def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray,
+                     cbar_label: str = None):
         if readings.size == 0:
             return
         # readings shape: [N, 64]
-        # Image axes: x = LDC index (0..63), y = distance (m)
-        # ImageItem expects data[x, y] so transpose: [64, N]
+        # col-major ImageItem: data[x, y] → x=LDC index, y=sample/distance
         img_data = readings.T.astype(np.float32)
 
-        # Convert time span to distance
         t0 = timestamps_ms[0] / 1000.0
         t1 = timestamps_ms[-1] / 1000.0
         total_distance = (t1 - t0) * self.velocity_ms  # metres
 
-        # Compute levels from data so the heatmap is always visible
         lo = float(np.percentile(img_data, 2))
         hi = float(np.percentile(img_data, 98))
         if hi <= lo:
             hi = lo + 1.0
-        self._levels = (lo, hi)
-        self.img.setImage(img_data, autoLevels=False, levels=self._levels)
-        self.bar.setLevels((lo, hi))
-        # rect(x, y, width, height): x=LDC axis, y=distance axis
+
+        # Let the ColorBarItem be the single authority on levels
+        self.img.setImage(img_data, autoLevels=False)
+        self.bar.setLevels(low=lo, high=hi)
         self.img.setRect(pg.QtCore.QRectF(0, 0, NUM_LDCS, max(total_distance, 0.01)))
         vb = self.plot_widget.getViewBox()
         vb.setRange(xRange=(0, NUM_LDCS), yRange=(0, max(total_distance, 0.1)), padding=0)
+        if cbar_label is not None:
+            self.bar.setLabel('right', cbar_label)
 
 
 class LDCGridWidget(QWidget):
@@ -269,7 +268,17 @@ class SingleLDCWidget(QWidget):
         self.grid = LDCGridWidget()
         layout.addWidget(self.grid)
 
-        self.plot_widget = pg.PlotWidget(title='LDC Inductance vs Time')
+        # X-axis mode toggle
+        x_row = QHBoxLayout()
+        x_row.addWidget(QLabel('X axis:'))
+        self._x_mode = QComboBox()
+        self._x_mode.addItems(['Time (s)', 'Sample No.'])
+        self._x_mode.setFixedWidth(120)
+        x_row.addWidget(self._x_mode)
+        x_row.addStretch()
+        layout.addLayout(x_row)
+
+        self.plot_widget = pg.PlotWidget(title='LDC Inductance Trace')
         self.plot_widget.setLabel('left', 'Inductance (µH)')
         self.plot_widget.setLabel('bottom', 'Time (s)')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
@@ -282,7 +291,15 @@ class SingleLDCWidget(QWidget):
     def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray):
         if readings.size == 0:
             return
-        t = timestamps_ms / 1000.0
+
+        if self._x_mode.currentIndex() == 0:
+            x = timestamps_ms / 1000.0
+            x_label = 'Time (s)'
+        else:
+            x = np.arange(len(timestamps_ms), dtype=np.float64)
+            x_label = 'Sample No.'
+        self.plot_widget.setLabel('bottom', x_label)
+
         indices = sorted(self.grid.selected)
 
         for key in list(self._curves.keys()):
@@ -295,7 +312,7 @@ class SingleLDCWidget(QWidget):
                 pen = pg.mkPen(color=colour, width=1.5)
                 self._curves[ldc_i] = self.plot_widget.plot(
                     pen=pen, name=f'LDC {ldc_i}')
-            self._curves[ldc_i].setData(t, readings[:, ldc_i])
+            self._curves[ldc_i].setData(x, readings[:, ldc_i])
 
 
 class StatusBar(QWidget):
@@ -555,13 +572,10 @@ class MainWindow(QMainWindow):
             y_label = 'Inductance (µH)'
             cbar_label = 'Inductance (µH)'
 
-        current_tab = self.tabs.currentIndex()
         try:
             self.single_ldc.plot_widget.setLabel('left', y_label)
-            if current_tab == 0:
-                self.single_ldc.refresh_plot(timestamps, readings)
-            elif current_tab == 1:
-                self.heatmap.refresh_plot(timestamps, readings)
+            self.single_ldc.refresh_plot(timestamps, readings)
+            self.heatmap.refresh_plot(timestamps, readings, cbar_label)
         except Exception as e:
             msg = f'[UI] refresh error: {e}'
             print(msg)
