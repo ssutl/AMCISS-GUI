@@ -18,10 +18,10 @@ import pyqtgraph as pg
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QGroupBox, QLineEdit, QSplitter, QStatusBar, QTabWidget,
-    QGridLayout, QFrame, QSizePolicy
+    QGroupBox, QCheckBox, QLineEdit, QSlider, QSplitter,
+    QStatusBar, QTabWidget, QGridLayout
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QElapsedTimer
 from PyQt6.QtGui import QFont, QColor
 
 from buffer import DataBuffer
@@ -53,6 +53,18 @@ QLabel {{ color: {TEXT}; }}
 QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox {{
     background: {SURFACE}; border: 1px solid #45475a; border-radius: 4px;
     padding: 3px; color: {TEXT}; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{
+    subcontrol-origin: border; subcontrol-position: top right;
+    width: 16px; border-left: 1px solid #45475a; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border; subcontrol-position: bottom right;
+    width: 16px; border-left: 1px solid #45475a; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    image: none; border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-bottom: 5px solid {TEXT}; width: 0; height: 0; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    image: none; border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 5px solid {TEXT}; width: 0; height: 0; }}
 QListWidget {{ background: {SURFACE}; border: 1px solid #45475a; border-radius: 4px; }}
 QTabWidget::pane {{ border: 1px solid {SURFACE}; }}
 QTabBar::tab {{ background: {SURFACE}; padding: 6px 14px; border-radius: 4px 4px 0 0; }}
@@ -256,27 +268,104 @@ class LDCGridWidget(QWidget):
                     f' border: none; border-radius: 2px;')
 
 
-class SingleLDCWidget(QWidget):
-    """Live trace for LDCs selected via the grid."""
+class LDCSelectorWidget(QWidget):
+    """
+    Grid of toggle buttons showing LDC layout across two DCMs.
+    DCM 1 (indices 0-31) on left, DCM 2 (indices 32-63) on right.
+    Each DCM: 2 rows x 16 columns (row 1: 1-16, row 2: 17-32).
+    """
+
+    BTN_STYLE_OFF = f'background: {SURFACE}; border: 1px solid #45475a; border-radius: 2px; padding: 1px; color: {TEXT}; font-size: 10px; min-width: 22px; max-width: 28px; min-height: 18px;'
+    BTN_STYLE_ON = f'background: {ACCENT}; border: 1px solid {ACCENT}; border-radius: 2px; padding: 1px; color: {BASE}; font-weight: bold; font-size: 10px; min-width: 22px; max-width: 28px; min-height: 18px;'
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        self.grid = LDCGridWidget()
-        layout.addWidget(self.grid)
+        # Header row with title and action buttons
+        header = QHBoxLayout()
+        header.addWidget(QLabel('LDC Selection'))
+        self.select_all_btn = QPushButton('All')
+        self.select_all_btn.setFixedWidth(60)
+        self.select_all_btn.clicked.connect(self._select_all)
+        self.clear_btn = QPushButton('Clear')
+        self.clear_btn.setFixedWidth(60)
+        self.clear_btn.clicked.connect(self._clear_all)
+        header.addStretch()
+        header.addWidget(self.select_all_btn)
+        header.addWidget(self.clear_btn)
+        layout.addLayout(header)
 
-        # X-axis mode toggle
-        x_row = QHBoxLayout()
-        x_row.addWidget(QLabel('X axis:'))
-        self._x_mode = QComboBox()
-        self._x_mode.addItems(['Time (s)', 'Sample No.'])
-        self._x_mode.setFixedWidth(120)
-        x_row.addWidget(self._x_mode)
-        x_row.addStretch()
-        layout.addLayout(x_row)
+        # Grid: DCM1 | separator | DCM2
+        grid_layout = QHBoxLayout()
+        grid_layout.setSpacing(12)
+
+        self._buttons = {}  # 0-based index -> QPushButton
+        self._selected = set()
+
+        for dcm_idx, dcm_label in enumerate(['DCM 1', 'DCM 2']):
+            dcm_box = QVBoxLayout()
+            dcm_box.setSpacing(2)
+            lbl = QLabel(dcm_label)
+            lbl.setStyleSheet(f'color: {ACCENT}; font-weight: bold; font-size: 11px;')
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            dcm_box.addWidget(lbl)
+
+            grid = QGridLayout()
+            grid.setSpacing(2)
+            base = dcm_idx * 32  # DCM1: 0, DCM2: 32
+
+            for row in range(2):
+                for col in range(16):
+                    ldc_0based = base + row * 16 + col
+                    ldc_display = row * 16 + col + 1  # 1-based within DCM
+                    btn = QPushButton(str(ldc_display))
+                    btn.setStyleSheet(self.BTN_STYLE_OFF)
+                    btn.setCheckable(True)
+                    btn.clicked.connect(lambda checked, idx=ldc_0based: self._toggle(idx))
+                    grid.addWidget(btn, row, col)
+                    self._buttons[ldc_0based] = btn
+
+            dcm_box.addLayout(grid)
+            grid_layout.addLayout(dcm_box)
+
+        layout.addLayout(grid_layout)
+
+    def _toggle(self, idx: int):
+        if idx in self._selected:
+            self._selected.discard(idx)
+            self._buttons[idx].setStyleSheet(self.BTN_STYLE_OFF)
+        else:
+            self._selected.add(idx)
+            self._buttons[idx].setStyleSheet(self.BTN_STYLE_ON)
+
+    def _select_all(self):
+        for idx, btn in self._buttons.items():
+            self._selected.add(idx)
+            btn.setChecked(True)
+            btn.setStyleSheet(self.BTN_STYLE_ON)
+
+    def _clear_all(self):
+        for idx, btn in self._buttons.items():
+            self._selected.discard(idx)
+            btn.setChecked(False)
+            btn.setStyleSheet(self.BTN_STYLE_OFF)
+
+    def selected_indices(self) -> list[int]:
+        """Return sorted list of 0-based selected LDC indices."""
+        return sorted(self._selected)
+
+
+class SingleLDCWidget(QWidget):
+    """Live trace for selected LDCs."""
+
+    def __init__(self, ldc_selector: LDCSelectorWidget, parent=None):
+        super().__init__(parent)
+        self._selector = ldc_selector
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self.plot_widget = pg.PlotWidget(title='LDC Inductance Trace')
         self.plot_widget.setLabel('left', 'Inductance (µH)')
@@ -291,17 +380,10 @@ class SingleLDCWidget(QWidget):
     def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray):
         if readings.size == 0:
             return
+        t = (timestamps_ms - timestamps_ms[-1]) / 1000.0
+        indices = self._selector.selected_indices()
 
-        if self._x_mode.currentIndex() == 0:
-            x = timestamps_ms / 1000.0
-            x_label = 'Time (s)'
-        else:
-            x = np.arange(len(timestamps_ms), dtype=np.float64)
-            x_label = 'Sample No.'
-        self.plot_widget.setLabel('bottom', x_label)
-
-        indices = sorted(self.grid.selected)
-
+        # Remove curves no longer needed
         for key in list(self._curves.keys()):
             if key not in indices:
                 self.plot_widget.removeItem(self._curves.pop(key))
@@ -311,8 +393,8 @@ class SingleLDCWidget(QWidget):
             if ldc_i not in self._curves:
                 pen = pg.mkPen(color=colour, width=1.5)
                 self._curves[ldc_i] = self.plot_widget.plot(
-                    pen=pen, name=f'LDC {ldc_i}')
-            self._curves[ldc_i].setData(x, readings[:, ldc_i])
+                    pen=pen, name=f'LDC {ldc_i + 1}')
+            self._curves[ldc_i].setData(t, readings[:, ldc_i])
 
 
 class StatusBar(QWidget):
@@ -397,14 +479,15 @@ class SettingsPanel(QGroupBox):
         self.clear_btn = QPushButton('Clear Buffer')
         layout.addWidget(self.clear_btn, 7, 0, 1, 2)
 
-        self.record_btn = QPushButton('⏺  Start Recording')
-        self.record_btn.setStyleSheet(f'border-color: {RED};')
-        layout.addWidget(self.record_btn, 10, 0, 1, 2)
+        layout.addWidget(QLabel('Window (s):'), 7, 0)
+        self.window_spin = QDoubleSpinBox()
+        self.window_spin.setRange(1.0, 60.0)
+        self.window_spin.setValue(10.0)
+        self.window_spin.setDecimals(1)
+        self.window_spin.setSingleStep(1.0)
+        self.window_spin.setToolTip('Time window for plots, heatmap, and recording duration')
+        layout.addWidget(self.window_spin, 7, 1)
 
-        self.record_label = QLabel('Not recording')
-        self.record_label.setStyleSheet(f'color: #6c7086; font-size: 10px;')
-        self.record_label.setWordWrap(True)
-        layout.addWidget(self.record_label, 11, 0, 1, 2)
 
         layout.addWidget(QLabel('Scale factor (µH):'), 8, 0)
         self.scale_spin = QDoubleSpinBox()
@@ -424,6 +507,15 @@ class SettingsPanel(QGroupBox):
         self.velocity_spin.setToolTip('Used to convert time axis to distance on heatmap')
         layout.addWidget(self.velocity_spin, 9, 1)
 
+        self.record_btn = QPushButton('⏺  Start Recording')
+        self.record_btn.setStyleSheet(f'border-color: {RED};')
+        layout.addWidget(self.record_btn, 10, 0, 1, 2)
+
+        self.record_label = QLabel('Not recording')
+        self.record_label.setStyleSheet(f'color: #6c7086; font-size: 10px;')
+        self.record_label.setWordWrap(True)
+        layout.addWidget(self.record_label, 11, 0, 1, 2)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -438,6 +530,8 @@ class MainWindow(QMainWindow):
         self.buffer._recorder = self._recorder  # inject recorder into buffer
         self._listener = None
         self._dummy = None
+        self._recording_elapsed = QElapsedTimer()
+        self._recording_active = False
 
         # Central widget
         central = QWidget()
@@ -455,16 +549,24 @@ class MainWindow(QMainWindow):
         left_widget.setLayout(left)
         left_widget.setMaximumWidth(240)
 
-        # ── Right: tabs (single LDC | heatmap) ──
+        # ── Right: LDC selector + tabs ──
+        right = QVBoxLayout()
+        self.ldc_selector = LDCSelectorWidget()
+        right.addWidget(self.ldc_selector)
+
         self.tabs = QTabWidget()
-        self.single_ldc = SingleLDCWidget()
+        self.single_ldc = SingleLDCWidget(self.ldc_selector)
         self.heatmap = HeatmapWidget()
         self.tabs.addTab(self.single_ldc, '📈  LDC Traces')
         self.tabs.addTab(self.heatmap, '🌡  Heatmap')
+        right.addWidget(self.tabs, stretch=1)
+
+        right_widget = QWidget()
+        right_widget.setLayout(right)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_widget)
-        splitter.addWidget(self.tabs)
+        splitter.addWidget(right_widget)
         splitter.setStretchFactor(1, 4)
         root.addWidget(splitter)
 
@@ -492,6 +594,12 @@ class MainWindow(QMainWindow):
         self.settings.velocity_spin.valueChanged.connect(
             lambda v: setattr(self.heatmap, 'velocity_ms', v))
         self.settings.record_btn.clicked.connect(self._toggle_recording)
+
+    # ── Properties ─────────────────────────────────────────────
+
+    @property
+    def window_s(self) -> float:
+        return self.settings.window_spin.value()
 
     # ── Slots ──────────────────────────────────────────────────
 
@@ -526,17 +634,23 @@ class MainWindow(QMainWindow):
 
     def _toggle_recording(self):
         if self._recorder.is_recording:
-            count = self._recorder.stop()
-            self.settings.record_btn.setText('⏺  Start Recording')
-            self.settings.record_btn.setStyleSheet(f'border-color: {RED};')
-            self.settings.record_label.setText(f'Saved {count} samples\n{self._recorder.current_filename}')
-            self.settings.record_label.setStyleSheet(f'color: {GREEN}; font-size: 10px;')
+            self._stop_recording()
         else:
             filename = self._recorder.start()
+            self._recording_elapsed.start()
+            self._recording_active = True
             self.settings.record_btn.setText('⏹  Stop Recording')
             self.settings.record_btn.setStyleSheet(f'background: {RED}; color: white; border-color: {RED};')
             self.settings.record_label.setText(f'Recording...\n{filename}')
             self.settings.record_label.setStyleSheet(f'color: {RED}; font-size: 10px;')
+
+    def _stop_recording(self):
+        self._recording_active = False
+        count = self._recorder.stop()
+        self.settings.record_btn.setText('⏺  Start Recording')
+        self.settings.record_btn.setStyleSheet(f'border-color: {RED};')
+        self.settings.record_label.setText(f'Saved {count} samples\n{self._recorder.current_filename}')
+        self.settings.record_label.setStyleSheet(f'color: {GREEN}; font-size: 10px;')
 
     def _update_scale_factor(self, value: float):
         import packet as pkt
@@ -545,10 +659,24 @@ class MainWindow(QMainWindow):
     def _refresh_ui(self):
         timestamps, l_raw, rp_raw = self.buffer.get_snapshot()
 
-        # Update recording sample count label
-        if self._recorder.is_recording:
+        # Slice to time window (last N seconds only)
+        if timestamps.size > 0:
+            t_latest = timestamps[-1]
+            window_ms = self.window_s * 1000.0
+            mask = timestamps >= (t_latest - window_ms)
+            timestamps = timestamps[mask]
+            readings = readings[mask]
+
+        # Auto-stop recording after window duration
+        if self._recording_active and self._recorder.is_recording:
+            elapsed_s = self._recording_elapsed.elapsed() / 1000.0
+            remaining = max(0.0, self.window_s - elapsed_s)
             self.settings.record_label.setText(
-                f'Recording... {self._recorder.sample_count} samples\n{self._recorder.current_filename}')
+                f'Recording... {self._recorder.sample_count} samples\n'
+                f'{remaining:.1f}s remaining')
+            if elapsed_s >= self.window_s:
+                self._stop_recording()
+
         connected = (self._listener is not None and self._listener.is_alive()) or \
                     (self._dummy is not None and self._dummy.is_alive())
         packets = self._listener.packets_received if self._listener else 0
