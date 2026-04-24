@@ -195,6 +195,10 @@ class LDCSelectorWidget(QWidget):
 
         layout.addLayout(grid_layout)
 
+        # Pre-select LDC 1 (index 0) on startup
+        self._toggle(0)
+        self._buttons[0].setChecked(True)
+
     def _toggle(self, idx: int):
         if idx in self._selected:
             self._selected.discard(idx)
@@ -229,6 +233,17 @@ class SingleLDCWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # X-axis toggle
+        ctrl_row = QHBoxLayout()
+        ctrl_row.addWidget(QLabel('X-Axis:'))
+        self.xaxis_combo = QComboBox()
+        self.xaxis_combo.addItems(['Time (s)', 'Sample No.'])
+        self.xaxis_combo.setFixedWidth(120)
+        self.xaxis_combo.currentIndexChanged.connect(self._update_xaxis_label)
+        ctrl_row.addWidget(self.xaxis_combo)
+        ctrl_row.addStretch()
+        layout.addLayout(ctrl_row)
+
         self.plot_widget = pg.PlotWidget(title='LDC Inductance Trace')
         self.plot_widget.setLabel('left', 'Inductance (µH)')
         self.plot_widget.setLabel('bottom', 'Time (s)')
@@ -239,10 +254,22 @@ class SingleLDCWidget(QWidget):
         self._curves = {}
         self._colours = [ACCENT, GREEN, RED, YELLOW, '#cba6f7', '#fab387', '#94e2d5']
 
+    def _update_xaxis_label(self):
+        if self.xaxis_combo.currentIndex() == 1:
+            self.plot_widget.setLabel('bottom', 'Sample No.')
+        else:
+            self.plot_widget.setLabel('bottom', 'Time (s)')
+
     def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray):
         if readings.size == 0:
             return
-        t = (timestamps_ms - timestamps_ms[-1]) / 1000.0
+
+        use_samples = self.xaxis_combo.currentIndex() == 1
+        if use_samples:
+            x = np.arange(len(timestamps_ms))
+        else:
+            x = (timestamps_ms - timestamps_ms[0]) / 1000.0
+
         indices = self._selector.selected_indices()
 
         # Remove curves no longer needed
@@ -256,7 +283,7 @@ class SingleLDCWidget(QWidget):
                 pen = pg.mkPen(color=colour, width=1.5)
                 self._curves[ldc_i] = self.plot_widget.plot(
                     pen=pen, name=f'LDC {ldc_i + 1}')
-            self._curves[ldc_i].setData(t, readings[:, ldc_i])
+            self._curves[ldc_i].setData(x, readings[:, ldc_i])
 
 
 class StatusBar(QWidget):
