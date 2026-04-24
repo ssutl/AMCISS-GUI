@@ -127,145 +127,7 @@ class HeatmapWidget(QWidget):
         vb = self.plot_widget.getViewBox()
         vb.setRange(xRange=(0, NUM_LDCS), yRange=(0, max(total_distance, 0.1)), padding=0)
         if cbar_label is not None:
-            self.bar.setLabel('right', cbar_label)
-
-
-class LDCGridWidget(QWidget):
-    """
-    Visual PCB layout — two DCMs side by side, each 2 rows × 16 LDCs.
-      DCM0: LDCs  0-15 (top row),  16-31 (bottom row)
-      DCM1: LDCs 32-47 (top row),  48-63 (bottom row)
-    Click to toggle. Range entry for bulk selection (0-based, e.g. '0-11, 32, 50-55').
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.selected: set[int] = set()
-        self._buttons: list[QPushButton] = [None] * NUM_LDCS
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 2, 0, 2)
-        outer.setSpacing(3)
-
-        # ── Two DCM blocks side by side ──────────────────────────
-        grids_row = QHBoxLayout()
-        grids_row.setSpacing(0)
-
-        for dcm in range(2):
-            base = dcm * 32
-            block = QVBoxLayout()
-            block.setSpacing(2)
-
-            lbl = QLabel(f'DCM{dcm}')
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(
-                f'color: {ACCENT}; font-weight: bold; font-size: 10px; padding: 1px;')
-            block.addWidget(lbl)
-
-            g = QGridLayout()
-            g.setSpacing(2)
-            g.setContentsMargins(4, 0, 4, 0)
-
-            for i in range(32):
-                ldc_idx = base + i
-                row = i // 16
-                col = i % 16
-                btn = QPushButton(str(ldc_idx))
-                btn.setMinimumSize(0, 20)
-                btn.setMaximumHeight(24)
-                btn.setFont(QFont('Segoe UI', 6))
-                btn.setSizePolicy(
-                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                btn.clicked.connect(
-                    lambda checked, idx=ldc_idx: self._toggle(idx))
-                g.addWidget(btn, row, col)
-                self._buttons[ldc_idx] = btn
-
-            block.addLayout(g)
-            grids_row.addLayout(block, stretch=1)
-
-            if dcm == 0:
-                sep = QFrame()
-                sep.setFrameShape(QFrame.Shape.VLine)
-                sep.setFixedWidth(2)
-                sep.setStyleSheet(f'background: {SURFACE};')
-                grids_row.addWidget(sep)
-
-        outer.addLayout(grids_row)
-
-        # ── Range input row ──────────────────────────────────────
-        range_row = QHBoxLayout()
-        range_row.setSpacing(4)
-        range_row.addWidget(QLabel('Select:'))
-        self._range_edit = QLineEdit()
-        self._range_edit.setPlaceholderText('e.g. 0-11, 32, 50-55')
-        self._range_edit.setFixedHeight(24)
-        self._range_edit.returnPressed.connect(self._apply_range)
-        range_row.addWidget(self._range_edit, stretch=1)
-
-        add_btn = QPushButton('Add')
-        add_btn.setFixedWidth(50)
-        add_btn.clicked.connect(self._apply_range)
-        range_row.addWidget(add_btn)
-
-        clear_btn = QPushButton('Clear')
-        clear_btn.setFixedWidth(50)
-        clear_btn.clicked.connect(self._clear_all)
-        range_row.addWidget(clear_btn)
-
-        outer.addLayout(range_row)
-        self.selected.add(0)
-        self._update_styles()
-
-    def _toggle(self, idx: int):
-        if idx in self.selected:
-            self.selected.discard(idx)
-        else:
-            self.selected.add(idx)
-        self._update_styles()
-
-    def _apply_range(self):
-        text = self._range_edit.text().strip()
-        for part in text.split(','):
-            part = part.strip()
-            if not part:
-                continue
-            if '-' in part:
-                halves = part.split('-', 1)
-                try:
-                    a, b = int(halves[0]), int(halves[1])
-                    for i in range(min(a, b), max(a, b) + 1):
-                        if 0 <= i < NUM_LDCS:
-                            self.selected.add(i)
-                except ValueError:
-                    pass
-            else:
-                try:
-                    i = int(part)
-                    if 0 <= i < NUM_LDCS:
-                        self.selected.add(i)
-                except ValueError:
-                    pass
-        self._range_edit.clear()
-        self._update_styles()
-
-    def _clear_all(self):
-        self.selected.clear()
-        self._range_edit.clear()
-        self._update_styles()
-
-    def _update_styles(self):
-        for i, btn in enumerate(self._buttons):
-            if btn is None:
-                continue
-            if i in self.selected:
-                btn.setStyleSheet(
-                    f'background: {ACCENT}; color: {BASE};'
-                    f' border: none; border-radius: 2px;')
-            else:
-                btn.setStyleSheet(
-                    f'background: {SURFACE}; color: {TEXT};'
-                    f' border: none; border-radius: 2px;')
+            self.bar.axis.setLabel(cbar_label)
 
 
 class LDCSelectorWidget(QWidget):
@@ -479,42 +341,41 @@ class SettingsPanel(QGroupBox):
         self.clear_btn = QPushButton('Clear Buffer')
         layout.addWidget(self.clear_btn, 7, 0, 1, 2)
 
-        layout.addWidget(QLabel('Window (s):'), 7, 0)
+        layout.addWidget(QLabel('Window (s):'), 8, 0)
         self.window_spin = QDoubleSpinBox()
         self.window_spin.setRange(1.0, 60.0)
         self.window_spin.setValue(10.0)
         self.window_spin.setDecimals(1)
         self.window_spin.setSingleStep(1.0)
         self.window_spin.setToolTip('Time window for plots, heatmap, and recording duration')
-        layout.addWidget(self.window_spin, 7, 1)
+        layout.addWidget(self.window_spin, 8, 1)
 
-
-        layout.addWidget(QLabel('Scale factor (µH):'), 8, 0)
+        layout.addWidget(QLabel('Scale factor (µH):'), 9, 0)
         self.scale_spin = QDoubleSpinBox()
         self.scale_spin.setRange(0.1, 10000.0)
         self.scale_spin.setValue(SCALE_FACTOR_UH)
         self.scale_spin.setDecimals(1)
         self.scale_spin.setSingleStep(1.0)
         self.scale_spin.setToolTip('Calibration: raw 65535 = this value in µH')
-        layout.addWidget(self.scale_spin, 8, 1)
+        layout.addWidget(self.scale_spin, 9, 1)
 
-        layout.addWidget(QLabel('Belt velocity (m/s):'), 9, 0)
+        layout.addWidget(QLabel('Belt velocity (m/s):'), 10, 0)
         self.velocity_spin = QDoubleSpinBox()
         self.velocity_spin.setRange(0.1, 10.0)
         self.velocity_spin.setValue(2.0)
         self.velocity_spin.setDecimals(2)
         self.velocity_spin.setSingleStep(0.1)
         self.velocity_spin.setToolTip('Used to convert time axis to distance on heatmap')
-        layout.addWidget(self.velocity_spin, 9, 1)
+        layout.addWidget(self.velocity_spin, 10, 1)
 
         self.record_btn = QPushButton('⏺  Start Recording')
         self.record_btn.setStyleSheet(f'border-color: {RED};')
-        layout.addWidget(self.record_btn, 10, 0, 1, 2)
+        layout.addWidget(self.record_btn, 11, 0, 1, 2)
 
         self.record_label = QLabel('Not recording')
         self.record_label.setStyleSheet(f'color: #6c7086; font-size: 10px;')
         self.record_label.setWordWrap(True)
-        layout.addWidget(self.record_label, 11, 0, 1, 2)
+        layout.addWidget(self.record_label, 12, 0, 1, 2)
 
 
 class MainWindow(QMainWindow):
@@ -659,14 +520,6 @@ class MainWindow(QMainWindow):
     def _refresh_ui(self):
         timestamps, l_raw, rp_raw = self.buffer.get_snapshot()
 
-        # Slice to time window (last N seconds only)
-        if timestamps.size > 0:
-            t_latest = timestamps[-1]
-            window_ms = self.window_s * 1000.0
-            mask = timestamps >= (t_latest - window_ms)
-            timestamps = timestamps[mask]
-            readings = readings[mask]
-
         # Auto-stop recording after window duration
         if self._recording_active and self._recorder.is_recording:
             elapsed_s = self._recording_elapsed.elapsed() / 1000.0
@@ -699,6 +552,14 @@ class MainWindow(QMainWindow):
             readings = raw_to_uh(l_raw)
             y_label = 'Inductance (µH)'
             cbar_label = 'Inductance (µH)'
+
+        # Slice to time window (last N seconds only)
+        if timestamps.size > 0:
+            t_latest = timestamps[-1]
+            window_ms = self.window_s * 1000.0
+            mask = timestamps >= (t_latest - window_ms)
+            timestamps = timestamps[mask]
+            readings = readings[mask]
 
         try:
             self.single_ldc.plot_widget.setLabel('left', y_label)
