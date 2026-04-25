@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QStatusBar, QTabWidget, QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer, QElapsedTimer
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont, QColor, QPixmap
 
 from buffer import DataBuffer
 from udp_listener import UDPListener, DummyGenerator
@@ -428,8 +428,17 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        # ── Left: settings + single/multi LDC ──
+        # ── Left: logo + settings + single/multi LDC ──
         left = QVBoxLayout()
+
+        import os
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'AMCISS Logo.png')
+        logo_label = QLabel()
+        logo_pixmap = QPixmap(logo_path)
+        logo_label.setPixmap(logo_pixmap.scaledToWidth(200, Qt.TransformationMode.SmoothTransformation))
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        left.addWidget(logo_label)
+
         self.settings = SettingsPanel()
         left.addWidget(self.settings)
         left.addStretch()
