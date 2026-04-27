@@ -9,10 +9,17 @@
       "Bash(git push *)",
       "Bash(venv/Scripts/python.exe *)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('main.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('main.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('main.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python3 -c \":*)",
+      "Bash(ls /Users/ssutl/Documents/Coding/amciss-gui/.venv/bin/python*)",
+      "Bash(ls /Users/ssutl/Documents/Coding/amciss-gui/venv/bin/python*)",
+      "Bash(pip3 list:*)",
+      "Bash(python3:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(git add:*)",
+      "Bash(git restore:*)"
     ]
   },
-  "disabledMcpjsonServers": [
-    "supabase"
-  ]
+  "disabledMcpjsonServers": ["supabase"]
 }
