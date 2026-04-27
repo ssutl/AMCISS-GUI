@@ -70,9 +70,14 @@ class HeatmapWidget(QWidget):
              Y = distance (m), derived from elapsed time x belt velocity
     """
 
+    BASELINE_SNAPSHOT_SAMPLES = 30  # ~0.6 s at 50 Hz — assumed "no metal" window
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.velocity_ms = 2.0  # m/s default, updated from settings panel
+        # Per-view per-coil baseline (shape [64]); keyed by view label so L and RP
+        # views keep independent baselines. None until first auto-snapshot.
+        self._baselines: dict[str, np.ndarray] = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -84,29 +89,57 @@ class HeatmapWidget(QWidget):
         self.img = pg.ImageItem()
         self.plot_widget.addItem(self.img)
 
-        # Colour map: low = dark blue, high = bright yellow/white
-        cm = pg.colormap.get('CET-L9')
-        self.bar = pg.ColorBarItem(values=(0, 50), colorMap=cm, label='Inductance (µH)')
+        # Diverging colour map for signed deltas (negative = blue, ~0 = neutral, positive = red)
+        cm = pg.colormap.get('CET-D1')
+        self.bar = pg.ColorBarItem(values=(-1, 1), colorMap=cm, label='Δ Inductance (µH)')
         self.bar.setImageItem(self.img, insert_in=self.plot_widget.getPlotItem())
 
         layout.addWidget(self.plot_widget)
 
+    def recalibrate(self):
+        """Drop stored baselines; next refresh will re-snapshot from current data."""
+        self._baselines.clear()
+
     def refresh_plot(self, timestamps_ms: np.ndarray, readings: np.ndarray,
-                     cbar_label: str = None):
+                     cbar_label: str = None, view_key: str = 'L'):
         if readings.size == 0:
             return
+
+        # Capture per-coil baseline if missing and we have enough samples.
+        # Use most-recent N samples (assumed "no metal" at calibration time).
+        baseline = self._baselines.get(view_key)
+        if baseline is None and readings.shape[0] >= self.BASELINE_SNAPSHOT_SAMPLES:
+            tail = readings[-self.BASELINE_SNAPSHOT_SAMPLES:]
+            baseline = np.median(tail, axis=0).astype(np.float32)
+            self._baselines[view_key] = baseline
+
+        if baseline is not None:
+            delta = readings.astype(np.float32) - baseline
+            display_label = f'Δ {cbar_label}' if cbar_label else 'Δ'
+        else:
+            delta = readings.astype(np.float32)
+            display_label = cbar_label or ''
+
         # readings shape: [N, 64]
         # col-major ImageItem: data[x, y] → x=LDC index, y=sample/distance
-        img_data = readings.T.astype(np.float32)
+        img_data = delta.T
 
         t0 = timestamps_ms[0] / 1000.0
         t1 = timestamps_ms[-1] / 1000.0
         total_distance = (t1 - t0) * self.velocity_ms  # metres
 
-        lo = float(np.percentile(img_data, 2))
-        hi = float(np.percentile(img_data, 98))
-        if hi <= lo:
-            hi = lo + 1.0
+        # Symmetric range around 0 so the diverging colour map is centred
+        # on "no change". Use 98th percentile of |delta| to ignore outliers.
+        if baseline is not None:
+            mag = float(np.percentile(np.abs(img_data), 98))
+            if mag <= 0:
+                mag = 1.0
+            lo, hi = -mag, mag
+        else:
+            lo = float(np.percentile(img_data, 2))
+            hi = float(np.percentile(img_data, 98))
+            if hi <= lo:
+                hi = lo + 1.0
 
         # Let the ColorBarItem be the single authority on levels
         self.img.setImage(img_data, autoLevels=False)
@@ -114,8 +147,7 @@ class HeatmapWidget(QWidget):
         self.img.setRect(pg.QtCore.QRectF(0, 0, NUM_LDCS, max(total_distance, 0.01)))
         vb = self.plot_widget.getViewBox()
         vb.setRange(xRange=(0, NUM_LDCS), yRange=(0, max(total_distance, 0.1)), padding=0)
-        if cbar_label is not None:
-            self.bar.setLabel('right', cbar_label)
+        self.bar.setLabel('right', display_label)
 
 
 class LDCGridWidget(QWidget):
@@ -424,6 +456,13 @@ class SettingsPanel(QGroupBox):
         self.velocity_spin.setToolTip('Used to convert time axis to distance on heatmap')
         layout.addWidget(self.velocity_spin, 9, 1)
 
+        self.calibrate_btn = QPushButton('Calibrate Heatmap Baseline')
+        self.calibrate_btn.setStyleSheet(f'border-color: {ACCENT};')
+        self.calibrate_btn.setToolTip(
+            'Snapshot current per-coil readings as the "no metal" baseline.\n'
+            'The heatmap then shows deviation from this baseline.')
+        layout.addWidget(self.calibrate_btn, 12, 0, 1, 2)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -492,6 +531,7 @@ class MainWindow(QMainWindow):
         self.settings.velocity_spin.valueChanged.connect(
             lambda v: setattr(self.heatmap, 'velocity_ms', v))
         self.settings.record_btn.clicked.connect(self._toggle_recording)
+        self.settings.calibrate_btn.clicked.connect(self.heatmap.recalibrate)
 
     # ── Slots ──────────────────────────────────────────────────
 
@@ -523,6 +563,8 @@ class MainWindow(QMainWindow):
 
     def _clear_buffer(self):
         self.buffer.clear()
+        # Stale baselines no longer correspond to incoming data
+        self.heatmap.recalibrate()
 
     def _toggle_recording(self):
         if self._recorder.is_recording:
@@ -567,15 +609,17 @@ class MainWindow(QMainWindow):
             readings = rp_raw.astype(np.float32)
             y_label = 'RP (raw)'
             cbar_label = 'RP (raw)'
+            view_key = 'RP'
         else:
             readings = raw_to_uh(l_raw)
             y_label = 'Inductance (µH)'
             cbar_label = 'Inductance (µH)'
+            view_key = 'L'
 
         try:
             self.single_ldc.plot_widget.setLabel('left', y_label)
             self.single_ldc.refresh_plot(timestamps, readings)
-            self.heatmap.refresh_plot(timestamps, readings, cbar_label)
+            self.heatmap.refresh_plot(timestamps, readings, cbar_label, view_key)
         except Exception as e:
             msg = f'[UI] refresh error: {e}'
             print(msg)
