@@ -57,9 +57,10 @@ class UDPListener(threading.Thread):
 
 class DummyGenerator(threading.Thread):
     """
-    Generates fake raw uint16 sensor data for UI testing without hardware.
-    Simulates a metal object sweeping across all 64 LDCs periodically.
-    L increases and RP decreases where the metal object is detected.
+    Generates fake sensor data simulating rocks/metal randomly landing
+    on the belt at different LDC positions, passing over the array,
+    then disappearing. Uses encode_packet/decode_packet so the full
+    packet pipeline is exercised.
     """
     def __init__(self, buffer: DataBuffer, rate_hz: float = 50.0):
         super().__init__(daemon=True, name='DummyGenerator')
@@ -74,34 +75,59 @@ class DummyGenerator(threading.Thread):
         print(f'[Dummy] Generating fake data at {self.rate_hz} Hz')
 
         L_BASELINE   = int(0.4  * 65535)
-        L_PEAK_DELTA = int(0.25 * 65535)   # metal raises L reading by 25%
+        L_PEAK_DELTA = int(0.25 * 65535)
+        RP_BASELINE  = int(0.6  * 65535)
+        RP_DIP_DELTA = int(0.3  * 65535)
 
-        RP_BASELINE   = int(0.6  * 65535)
-        RP_DIP_DELTA  = int(0.3  * 65535)  # metal lowers RP reading by 30%
+        # Active rocks: list of (center_ldc, width, start_ms, duration_ms, strength)
+        active_rocks = []
+        next_rock_ms = 0  # spawn first rock immediately
 
         while not self._stop_event.is_set():
             try:
                 t_ms = int((time.time() - self._t0) * 1000)
 
+                # Spawn new rocks at random intervals
+                if t_ms >= next_rock_ms:
+                    center = np.random.randint(2, 62)
+                    width = np.random.uniform(2, 6)
+                    duration = np.random.randint(800, 2500)
+                    strength = np.random.uniform(0.5, 1.0)
+                    active_rocks.append((center, width, t_ms, duration, strength))
+                    next_rock_ms = t_ms + np.random.randint(300, 1500)
+
+                # Remove expired rocks
+                active_rocks = [r for r in active_rocks if t_ms < r[2] + r[3]]
+
+                # Build readings
                 l_readings  = np.full(64, L_BASELINE,  dtype=np.uint16)
                 rp_readings = np.full(64, RP_BASELINE, dtype=np.uint16)
 
-                # Simulate metal object sweeping across belt every 8s
-                t_norm = (t_ms % 8000) / 8000.0
-                center = t_norm * 64
-                for i in range(64):
-                    dist = abs(i - center)
-                    if dist < 8:
-                        weight = np.exp(-dist ** 2 / 10.0)
-                        l_readings[i]  = min(65535, L_BASELINE  + int(L_PEAK_DELTA  * weight))
-                        rp_readings[i] = max(0,     RP_BASELINE - int(RP_DIP_DELTA  * weight))
+                for center, width, start_ms, duration, strength in active_rocks:
+                    elapsed = t_ms - start_ms
+                    # Intensity ramps up then down over the rock's pass
+                    intensity = np.sin((elapsed / duration) * np.pi) * strength
+                    for i in range(64):
+                        dist = abs(i - center)
+                        if dist < width * 3:
+                            weight = np.exp(-dist ** 2 / (2.0 * width)) * intensity
+                            l_val = L_BASELINE + int(L_PEAK_DELTA * weight)
+                            rp_val = RP_BASELINE - int(RP_DIP_DELTA * weight)
+                            # Multiple rocks can overlap — take the strongest signal
+                            l_readings[i]  = max(l_readings[i],  min(65535, l_val))
+                            rp_readings[i] = min(rp_readings[i], max(0, rp_val))
 
                 # Add noise
                 noise = np.random.randint(-200, 200, 64)
                 l_readings  = np.clip(l_readings.astype(np.int32)  + noise, 0, 65535).astype(np.uint16)
                 rp_readings = np.clip(rp_readings.astype(np.int32) + noise, 0, 65535).astype(np.uint16)
 
-                self.buffer.push(self._seq, t_ms, l_readings, rp_readings)
+                # Go through the real packet pipeline
+                raw = encode_packet(self._seq, t_ms, l_readings, rp_readings)
+                result = decode_packet(raw)
+                if result:
+                    seq, ts, l_dec, rp_dec = result
+                    self.buffer.push(seq, ts, l_dec, rp_dec)
                 self._seq = (self._seq + 1) & 0xFFFF
             except Exception as e:
                 print(f'[Dummy] loop error: {e}')
