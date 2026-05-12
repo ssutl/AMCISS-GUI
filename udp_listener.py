@@ -81,7 +81,9 @@ class DummyGenerator(threading.Thread):
 
         # Active rocks: list of (center_ldc, width, start_ms, duration_ms, strength)
         active_rocks = []
-        next_rock_ms = 0  # spawn first rock immediately
+        # Give the GUI heatmap time to capture a clean no-metal baseline before
+        # the first simulated object appears.
+        next_rock_ms = 1500
 
         while not self._stop_event.is_set():
             try:

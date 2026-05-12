@@ -9,7 +9,7 @@ from collections import deque
 
 
 class DataBuffer:
-    def __init__(self, duration_s: float = 60.0, sample_rate_hz: float = 50.0):
+    def __init__(self, duration_s: float = 60.0, sample_rate_hz: float = 2200.0):
         self._lock = threading.Lock()
         self.duration_s = duration_s
         self.sample_rate_hz = sample_rate_hz

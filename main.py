@@ -117,6 +117,9 @@ class HeatmapWidget(QWidget):
         if readings.size == 0:
             return
 
+        timestamps_ms = np.asarray(timestamps_ms, dtype=np.float64)
+        readings = np.asarray(readings, dtype=np.float32)
+
         # Capture per-coil baseline if missing and we have enough samples.
         # Use most-recent N samples (assumed "no metal" at calibration time).
         baseline = self._baselines.get(view_key)
@@ -126,39 +129,38 @@ class HeatmapWidget(QWidget):
             self._baselines[view_key] = baseline
 
         if baseline is not None:
-            delta = readings.astype(np.float32) - baseline
+            delta = readings - baseline
             display_label = f'Δ {cbar_label}' if cbar_label else 'Δ'
         else:
-            delta = readings.astype(np.float32)
+            delta = readings
             display_label = cbar_label or ''
 
         # readings shape: [N, 64]
         # col-major ImageItem: data[x, y] → x=LDC index, y=sample/distance
         img_data = delta.T
 
-        t0 = timestamps_ms[0] / 1000.0
-        t1 = timestamps_ms[-1] / 1000.0
-        total_distance = (t1 - t0) * self.velocity_ms  # metres
+        elapsed_s = (timestamps_ms - timestamps_ms[0]) / 1000.0
+        total_distance = float(elapsed_s[-1] * self.velocity_ms)  # metres
 
         # Symmetric range around 0 so the diverging colour map is centred
         # on "no change". Use 98th percentile of |delta| to ignore outliers.
         if baseline is not None:
-            mag = float(np.percentile(np.abs(img_data), 98))
+            mag = float(np.nanpercentile(np.abs(img_data), 98))
             if mag <= 0:
                 mag = 1.0
             lo, hi = -mag, mag
         else:
-            lo = float(np.percentile(img_data, 2))
-            hi = float(np.percentile(img_data, 98))
+            lo = float(np.nanpercentile(img_data, 2))
+            hi = float(np.nanpercentile(img_data, 98))
             if hi <= lo:
                 hi = lo + 1.0
 
         # Let the ColorBarItem be the single authority on levels
         self.img.setImage(img_data, autoLevels=False)
         self.bar.setLevels(low=lo, high=hi)
-        self.img.setRect(pg.QtCore.QRectF(0, 0, NUM_LDCS, max(total_distance, 0.01)))
+        self.img.setRect(pg.QtCore.QRectF(-0.5, 0, NUM_LDCS, max(total_distance, 0.01)))
         vb = self.plot_widget.getViewBox()
-        vb.setRange(xRange=(0, NUM_LDCS), yRange=(0, max(total_distance, 0.1)), padding=0)
+        vb.setRange(xRange=(-0.5, NUM_LDCS - 0.5), yRange=(0, max(total_distance, 0.1)), padding=0)
         self.bar.setLabel('right', display_label)
 
 
@@ -425,14 +427,23 @@ class SettingsPanel(QGroupBox):
         self.velocity_spin.setDecimals(2)
         self.velocity_spin.setSingleStep(0.1)
         self.velocity_spin.setToolTip('Used to convert time axis to distance on heatmap')
-        layout.addWidget(self.velocity_spin, 9, 1)
+        layout.addWidget(self.velocity_spin, 10, 1)
+
+        self.record_btn = QPushButton('Start Recording')
+        self.record_btn.setStyleSheet(f'border-color: {RED};')
+        layout.addWidget(self.record_btn, 11, 0, 1, 2)
+
+        self.record_label = QLabel('Not recording')
+        self.record_label.setWordWrap(True)
+        self.record_label.setStyleSheet('font-size: 10px;')
+        layout.addWidget(self.record_label, 12, 0, 1, 2)
 
         self.calibrate_btn = QPushButton('Calibrate Heatmap Baseline')
         self.calibrate_btn.setStyleSheet(f'border-color: {ACCENT};')
         self.calibrate_btn.setToolTip(
             'Snapshot current per-coil readings as the "no metal" baseline.\n'
             'The heatmap then shows deviation from this baseline.')
-        layout.addWidget(self.calibrate_btn, 12, 0, 1, 2)
+        layout.addWidget(self.calibrate_btn, 13, 0, 1, 2)
 
 
 class MainWindow(QMainWindow):
@@ -444,7 +455,7 @@ class MainWindow(QMainWindow):
 
         # Data layer
         self._recorder = Recorder(output_dir='recordings')
-        self.buffer = DataBuffer(duration_s=60.0)
+        self.buffer = DataBuffer(duration_s=60.0, sample_rate_hz=2200.0)
         self.buffer._recorder = self._recorder  # inject recorder into buffer
         self._listener = None
         self._dummy = None
@@ -546,7 +557,7 @@ class MainWindow(QMainWindow):
             self.settings.dummy_btn.setText('Start Dummy Data')
             self.settings.dummy_btn.setStyleSheet(f'border-color: {YELLOW};')
         else:
-            self._dummy = DummyGenerator(self.buffer, rate_hz=20.0)
+            self._dummy = DummyGenerator(self.buffer, rate_hz=50.0)
             self._dummy.start()
             self.settings.dummy_btn.setText('Stop Dummy Data')
             self.settings.dummy_btn.setStyleSheet(f'border-color: {RED};')
@@ -563,7 +574,7 @@ class MainWindow(QMainWindow):
             filename = self._recorder.start()
             self._recording_elapsed.start()
             self._recording_active = True
-            self.settings.record_btn.setText('⏹  Stop Recording')
+            self.settings.record_btn.setText('Stop Recording')
             self.settings.record_btn.setStyleSheet(f'background: {RED}; color: white; border-color: {RED};')
             self.settings.record_label.setText(f'Recording...\n{filename}')
             self.settings.record_label.setStyleSheet(f'color: {RED}; font-size: 10px;')
@@ -571,7 +582,7 @@ class MainWindow(QMainWindow):
     def _stop_recording(self):
         self._recording_active = False
         count = self._recorder.stop()
-        self.settings.record_btn.setText('⏺  Start Recording')
+        self.settings.record_btn.setText('Start Recording')
         self.settings.record_btn.setStyleSheet(f'border-color: {RED};')
         self.settings.record_label.setText(f'Saved {count} samples\n{self._recorder.current_filename}')
         self.settings.record_label.setStyleSheet(f'color: {GREEN}; font-size: 10px;')
@@ -579,6 +590,18 @@ class MainWindow(QMainWindow):
     def _update_scale_factor(self, value: float):
         import packet as pkt
         pkt.SCALE_FACTOR_UH = value
+
+    @property
+    def window_s(self) -> float:
+        return float(self.settings.window_spin.value())
+
+    def _apply_time_window(self, timestamps: np.ndarray, *arrays: np.ndarray):
+        if timestamps.size == 0:
+            return (timestamps, *arrays)
+
+        cutoff = timestamps[-1] - self.window_s * 1000.0
+        start = int(np.searchsorted(timestamps, cutoff, side='left'))
+        return (timestamps[start:], *(array[start:] for array in arrays))
 
     def _refresh_ui(self):
         timestamps, l_raw, rp_raw = self.buffer.get_snapshot()
@@ -604,6 +627,8 @@ class MainWindow(QMainWindow):
 
         if l_raw.size == 0:
             return
+
+        timestamps, l_raw, rp_raw = self._apply_time_window(timestamps, l_raw, rp_raw)
 
         # Select dataset based on view toggle
         view_rp = self.settings.view_combo.currentIndex() == 1
