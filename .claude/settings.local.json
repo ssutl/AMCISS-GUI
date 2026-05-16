@@ -19,8 +19,11 @@
       "Bash(git stash:*)",
       "Bash(git add:*)",
       "Bash(git restore:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(python *)"
     ]
   },
-  "disabledMcpjsonServers": ["supabase"]
+  "disabledMcpjsonServers": [
+    "supabase"
+  ]
 }
