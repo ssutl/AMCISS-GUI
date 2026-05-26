@@ -22,13 +22,22 @@ operators can capture a CSV for offline analysis.
 
 Layout
 ------
-  ┌──────────────┬──────────────────────────────────────────┐
-  │  logo        │  LDC selector (2 × DCM grids)            │
-  │  settings    ├──────────────────────────────────────────┤
-  │  controls    │  Tab 1: LDC traces                       │
-  │              │  Tab 2: heatmap (LDC index × distance)   │
-  └──────────────┴──────────────────────────────────────────┘
+  ┌──────────┬──────────┬──────────────────────────────────┐
+  │  logo    │  LDC     │  Tab 1: LDC traces               │
+  │  settings│  selector│  Tab 2: heatmap                  │
+  │  controls│  (2      │       (physical position ×       │
+  │          │  boards) │        distance)                 │
+  └──────────┴──────────┴──────────────────────────────────┘
   status bar: connection state, packets, dropped, buffer size
+
+Physical LDC layout (see README for the full diagram)
+-----------------------------------------------------
+The 64 channels are wired to two identical 32-channel PCBs mounted
+vertically side by side. Within each board: even LDC numbers form the
+left column, odd numbers form the right column. Numbering ascends
+bottom-up, with a mid-board gap separating the lower half (1-16 /
+33-48) from the upper half (17-32 / 49-64). Silkscreen label N maps
+to packet index N-1 in both ldc[] and rp[].
 """
 
 import os
@@ -98,6 +107,35 @@ NUM_LDCS = 64
 REFRESH_MS = 100  # default UI refresh interval (ms)
 
 
+def _build_physical_order() -> list[int]:
+    """
+    Build the mapping from physical column position across both PCBs
+    to packet index.
+
+    Each board is a 2-column vertical strip. Walking left to right we
+    visit, per board: the whole left column bottom-up, then the whole
+    right column bottom-up. Within a column, the bottom 8 LDCs precede
+    the top 8 LDCs (the mid-board gap is purely physical, not in the
+    data). Board 1 holds LDCs 1-32 (packet indices 0-31); Board 2
+    continues with 33-64 (packet indices 32-63).
+    """
+    order: list[int] = []
+    for board in range(2):
+        offset = board * 32
+        left_col  = list(range(16, 0, -2)) + list(range(32, 16, -2))  # evens
+        right_col = list(range(15, 0, -2)) + list(range(31, 16, -2))  # odds
+        for ldc_num in left_col + right_col:
+            order.append(offset + ldc_num - 1)
+    return order
+
+
+# Physical left-to-right order across both boards; each entry is a
+# 0-based packet index. PHYSICAL_LDC_LABELS gives the matching 1-based
+# silkscreen labels (used for heatmap tick labels).
+PHYSICAL_ORDER = _build_physical_order()
+PHYSICAL_LDC_LABELS = [idx + 1 for idx in PHYSICAL_ORDER]
+
+
 # ─────────────────────────────────────────────────────────────────
 # Heatmap view
 # ─────────────────────────────────────────────────────────────────
@@ -129,19 +167,34 @@ class HeatmapWidget(QWidget):
 
         # Per-view per-coil baselines (shape [64]); keyed by view label
         # ("L" or "RP") so the two views maintain independent baselines.
-        # ``None``/missing until the first auto-snapshot.
+        # Stored in packet-index order; the display reorders to physical.
         self._baselines: dict[str, np.ndarray] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.plot_widget = pg.PlotWidget(title='Heatmap — LDC Position vs Distance')
-        self.plot_widget.setLabel('bottom', 'LDC Index (position across belt)')
+        self.plot_widget.setLabel('bottom', 'LDC # (physical position, Board 1 ← left | right → Board 2)')
         self.plot_widget.setLabel('left', 'Distance (m)')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
 
+        # Label the X axis with the silkscreen LDC numbers that sit at
+        # each physical column, not the raw packet indices.
+        x_axis = self.plot_widget.getAxis('bottom')
+        major_ticks = [(i, str(PHYSICAL_LDC_LABELS[i])) for i in range(0, NUM_LDCS, 4)]
+        minor_ticks = [(i, '') for i in range(NUM_LDCS) if i % 4 != 0]
+        x_axis.setTicks([major_ticks, minor_ticks])
+
         self.img = pg.ImageItem()
         self.plot_widget.addItem(self.img)
+
+        # Dashed vertical line between Board 1 (physical columns 0-31)
+        # and Board 2 (32-63). Sits at x=31.5 so it lands in the seam.
+        self._board_separator = pg.InfiniteLine(
+            pos=31.5, angle=90,
+            pen=pg.mkPen('#bac2de', width=1, style=Qt.PenStyle.DashLine),
+        )
+        self.plot_widget.addItem(self._board_separator)
 
         # Diverging colour map: negative deltas → blue, near-zero → neutral,
         # positive deltas → red. This makes "metal present" pop out
@@ -192,10 +245,15 @@ class HeatmapWidget(QWidget):
             delta = readings
             display_label = cbar_label or ''
 
+        # Reorder columns from packet-index order to physical
+        # left-to-right order across both boards so each X column
+        # corresponds to a real position across the belt.
+        delta_display = delta[:, PHYSICAL_ORDER]
+
         # ``pg.ImageItem`` uses column-major ``data[x, y]`` indexing:
-        #   x → LDC index (column across belt)
+        #   x → physical position across belt (Board 1 then Board 2)
         #   y → sample / distance along belt
-        img_data = delta.T
+        img_data = delta_display.T
 
         elapsed_s = (timestamps_ms - timestamps_ms[0]) / 1000.0
         total_distance = float(elapsed_s[-1] * self.velocity_ms)  # metres
@@ -235,11 +293,19 @@ class HeatmapWidget(QWidget):
 
 class LDCSelectorWidget(QWidget):
     """
-    2-DCM grid of toggle buttons showing the physical channel layout.
+    Toggle-button grid mirroring the two physical PCBs.
 
-    DCM 1 (indices 0..31) sits on the left, DCM 2 (indices 32..63) on
-    the right. Each DCM is laid out as two rows of sixteen buttons
-    (row 1: channels 1–16, row 2: channels 17–32 within that DCM).
+    Two identical 2-column boards sit side by side. Within each board:
+        * Left column = even LDC numbers (e.g. 2, 4, ..., 32)
+        * Right column = odd LDC numbers (e.g. 1, 3, ..., 31)
+        * Numbering ascends bottom-up. A visual gap separates the
+          lower half from the upper half, mirroring the mid-board
+          electronics on the real PCB.
+
+    Board 1 carries LDC labels 1-32 (packet indices 0-31). Board 2
+    continues with 33-64 (packet indices 32-63). Button text shows the
+    1-based silkscreen label; the toggle stores the 0-based index that
+    matches ``ldc[]`` in the wire packet.
 
     The selection drives :class:`SingleLDCWidget`; the heatmap always
     shows all channels regardless of this selection.
@@ -248,13 +314,18 @@ class LDCSelectorWidget(QWidget):
     BTN_STYLE_OFF = (
         f'background: {SURFACE}; border: 1px solid #45475a; border-radius: 2px;'
         f' padding: 1px; color: {TEXT}; font-size: 10px;'
-        ' min-width: 22px; max-width: 28px; min-height: 18px;'
+        ' min-width: 24px; max-width: 32px; min-height: 18px;'
     )
     BTN_STYLE_ON = (
         f'background: {ACCENT}; border: 1px solid {ACCENT}; border-radius: 2px;'
         f' padding: 1px; color: {BASE}; font-weight: bold; font-size: 10px;'
-        ' min-width: 22px; max-width: 28px; min-height: 18px;'
+        ' min-width: 24px; max-width: 32px; min-height: 18px;'
     )
+
+    # Pixel height of the spacer row that visually separates the bottom
+    # half of a board (LDCs 1-16) from the top half (17-32). Mirrors
+    # the gap where the mid-board electronics sit on the real PCB.
+    GAP_ROW_HEIGHT = 12
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -266,55 +337,74 @@ class LDCSelectorWidget(QWidget):
         header = QHBoxLayout()
         header.addWidget(QLabel('LDC Selection'))
         self.select_all_btn = QPushButton('All')
-        self.select_all_btn.setFixedWidth(60)
+        self.select_all_btn.setFixedWidth(50)
         self.select_all_btn.clicked.connect(self._select_all)
         self.clear_btn = QPushButton('Clear')
-        self.clear_btn.setFixedWidth(60)
+        self.clear_btn.setFixedWidth(50)
         self.clear_btn.clicked.connect(self._clear_all)
         header.addStretch()
         header.addWidget(self.select_all_btn)
         header.addWidget(self.clear_btn)
         layout.addLayout(header)
 
-        # ── Grid: DCM 1 | DCM 2 ──────────────────────────────────
-        grid_layout = QHBoxLayout()
-        grid_layout.setSpacing(12)
+        # ── Two boards side by side, each as a 2-column vertical grid ──
+        boards_row = QHBoxLayout()
+        boards_row.setSpacing(14)
 
         self._buttons: dict[int, QPushButton] = {}  # 0-based index → button
         self._selected: set[int] = set()
 
-        for dcm_idx, dcm_label in enumerate(['DCM 1', 'DCM 2']):
-            dcm_box = QVBoxLayout()
-            dcm_box.setSpacing(2)
-            lbl = QLabel(dcm_label)
+        for board_idx in range(2):
+            board_box = QVBoxLayout()
+            board_box.setSpacing(2)
+            lbl = QLabel(f'Board {board_idx + 1}')
             lbl.setStyleSheet(f'color: {ACCENT}; font-weight: bold; font-size: 11px;')
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            dcm_box.addWidget(lbl)
+            board_box.addWidget(lbl)
 
             grid = QGridLayout()
             grid.setSpacing(2)
-            base = dcm_idx * 32  # DCM 1 starts at 0, DCM 2 starts at 32
+            offset = board_idx * 32
 
-            for row in range(2):
-                for col in range(16):
-                    ldc_0based = base + row * 16 + col
-                    ldc_display = row * 16 + col + 1  # 1-based label within DCM
-                    btn = QPushButton(str(ldc_display))
-                    btn.setStyleSheet(self.BTN_STYLE_OFF)
-                    btn.setCheckable(True)
-                    btn.clicked.connect(lambda checked, idx=ldc_0based: self._toggle(idx))
-                    grid.addWidget(btn, row, col)
-                    self._buttons[ldc_0based] = btn
+            # Top half: 8 rows, top-down. Row r holds LDC (18+2r) on the
+            # left and (17+2r) on the right within the board, so row 0 is
+            # the topmost pair (18, 17) and row 7 is (32, 31).
+            for r in range(8):
+                self._add_button(grid, r, 0, offset + (18 + 2 * r) - 1, offset + 18 + 2 * r)
+                self._add_button(grid, r, 1, offset + (17 + 2 * r) - 1, offset + 17 + 2 * r)
 
-            dcm_box.addLayout(grid)
-            grid_layout.addLayout(dcm_box)
+            # Mid-board gap (no buttons, just visual spacing).
+            spacer = QLabel('')
+            spacer.setFixedHeight(self.GAP_ROW_HEIGHT)
+            grid.addWidget(spacer, 8, 0, 1, 2)
 
-        layout.addLayout(grid_layout)
+            # Bottom half: 8 rows, top-down. Row r holds (2+2r) on the
+            # left and (1+2r) on the right, so the topmost row of the
+            # bottom block is (2, 1) and the bottom-most is (16, 15).
+            for r in range(8):
+                self._add_button(grid, 9 + r, 0, offset + (2 + 2 * r) - 1, offset + 2 + 2 * r)
+                self._add_button(grid, 9 + r, 1, offset + (1 + 2 * r) - 1, offset + 1 + 2 * r)
+
+            board_box.addLayout(grid)
+            boards_row.addLayout(board_box)
+
+        layout.addLayout(boards_row)
+        layout.addStretch()
 
         # Start with LDC 1 pre-selected so the trace plot has something
         # to draw before the operator interacts with the grid.
         self._toggle(0)
         self._buttons[0].setChecked(True)
+
+    def _add_button(self, grid: QGridLayout, row: int, col: int,
+                    idx_0based: int, label_1based: int) -> None:
+        """Create a toggle button for one LDC and register it in the grid."""
+        btn = QPushButton(str(label_1based))
+        btn.setStyleSheet(self.BTN_STYLE_OFF)
+        btn.setCheckable(True)
+        btn.clicked.connect(lambda checked, idx=idx_0based: self._toggle(idx))
+        grid.addWidget(btn, row, col)
+        self._buttons[idx_0based] = btn
 
     # ── Internal toggles ─────────────────────────────────────────
 
@@ -646,25 +736,24 @@ class MainWindow(QMainWindow):
         left_widget.setLayout(left)
         left_widget.setMaximumWidth(240)
 
-        # ── Right column: LDC selector + tabbed plots ────────────
-        right = QVBoxLayout()
+        # ── Middle column: vertical LDC selector (mirrors PCB layout) ──
         self.ldc_selector = LDCSelectorWidget()
-        right.addWidget(self.ldc_selector)
+        self.ldc_selector.setMaximumWidth(200)
 
+        # ── Right column: tabbed plots ──────────────────────────
         self.tabs = QTabWidget()
         self.single_ldc = SingleLDCWidget(self.ldc_selector)
         self.heatmap = HeatmapWidget()
         self.tabs.addTab(self.single_ldc, '📈  LDC Traces')
         self.tabs.addTab(self.heatmap, '🌡  Heatmap')
-        right.addWidget(self.tabs, stretch=1)
-
-        right_widget = QWidget()
-        right_widget.setLayout(right)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(1, 4)
+        splitter.addWidget(self.ldc_selector)
+        splitter.addWidget(self.tabs)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 5)
         root.addWidget(splitter)
 
         # ── Status bar ───────────────────────────────────────────
