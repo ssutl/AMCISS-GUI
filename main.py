@@ -52,6 +52,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
     QGroupBox, QLineEdit, QSplitter, QStatusBar, QTabWidget, QGridLayout,
+    QSizePolicy,
 )
 
 from buffer import DataBuffer
@@ -130,10 +131,9 @@ def _build_physical_order() -> list[int]:
 
 
 # Physical left-to-right order across both boards; each entry is a
-# 0-based packet index. PHYSICAL_LDC_LABELS gives the matching 1-based
-# silkscreen labels (used for heatmap tick labels).
+# 0-based packet index. The heatmap presents these columns as simple
+# belt positions, while the selector keeps the hardware LDC labels.
 PHYSICAL_ORDER = _build_physical_order()
-PHYSICAL_LDC_LABELS = [idx + 1 for idx in PHYSICAL_ORDER]
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -173,17 +173,24 @@ class HeatmapWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.plot_widget = pg.PlotWidget(title='Heatmap — LDC Position vs Distance')
-        self.plot_widget.setLabel('bottom', 'LDC # (physical position, Board 1 ← left | right → Board 2)')
+        self.plot_widget = pg.PlotWidget(title='Heatmap — Belt Position vs Distance')
+        self.plot_widget.setLabel('bottom', 'Position across belt')
         self.plot_widget.setLabel('left', 'Distance (m)')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
+        self.plot_widget.getAxis('left').enableAutoSIPrefix(False)
 
-        # Label the X axis with the silkscreen LDC numbers that sit at
-        # each physical column, not the raw packet indices.
+        # The operator view uses physical belt positions instead of
+        # backend packet/LDC labels. Board labels live on the top axis.
         x_axis = self.plot_widget.getAxis('bottom')
-        major_ticks = [(i, str(PHYSICAL_LDC_LABELS[i])) for i in range(0, NUM_LDCS, 4)]
-        minor_ticks = [(i, '') for i in range(NUM_LDCS) if i % 4 != 0]
+        major_positions = [0, 15, 31, 47, 63]
+        major_ticks = [(i, str(i + 1)) for i in major_positions]
+        minor_ticks = [(i, '') for i in range(NUM_LDCS) if i not in major_positions]
         x_axis.setTicks([major_ticks, minor_ticks])
+
+        top_axis = self.plot_widget.getAxis('top')
+        top_axis.setTicks([[(15.5, 'Board 1'), (47.5, 'Board 2')]])
+        top_axis.setStyle(showValues=True)
+        self.plot_widget.showAxis('top')
 
         self.img = pg.ImageItem()
         self.plot_widget.addItem(self.img)
@@ -195,6 +202,8 @@ class HeatmapWidget(QWidget):
             pen=pg.mkPen('#bac2de', width=1, style=Qt.PenStyle.DashLine),
         )
         self.plot_widget.addItem(self._board_separator)
+        self.plot_widget.setXRange(-0.5, NUM_LDCS + 0.5, padding=0)
+        self.plot_widget.setYRange(0, 0.1, padding=0)
 
         # Diverging colour map: negative deltas → blue, near-zero → neutral,
         # positive deltas → red. This makes "metal present" pop out
@@ -280,7 +289,7 @@ class HeatmapWidget(QWidget):
         self.img.setRect(pg.QtCore.QRectF(-0.5, 0, NUM_LDCS, max(total_distance, 0.01)))
         vb = self.plot_widget.getViewBox()
         vb.setRange(
-            xRange=(-0.5, NUM_LDCS - 0.5),
+            xRange=(-0.5, NUM_LDCS + 0.5),
             yRange=(0, max(total_distance, 0.1)),
             padding=0,
         )
@@ -291,9 +300,10 @@ class HeatmapWidget(QWidget):
 # LDC selector (which channels appear in the trace plot)
 # ─────────────────────────────────────────────────────────────────
 
-class LDCSelectorWidget(QWidget):
+class LDCSelectorWidget(QGroupBox):
     """
-    Toggle-button grid mirroring the two physical PCBs.
+    Toggle-button grid mirroring the two physical PCBs, wrapped in a
+    QGroupBox to match the Settings panel styling.
 
     Two identical 2-column boards sit side by side. Within each board:
         * Left column = even LDC numbers (e.g. 2, 4, ..., 32)
@@ -312,14 +322,14 @@ class LDCSelectorWidget(QWidget):
     """
 
     BTN_STYLE_OFF = (
-        f'background: {SURFACE}; border: 1px solid #45475a; border-radius: 2px;'
-        f' padding: 1px; color: {TEXT}; font-size: 10px;'
-        ' min-width: 24px; max-width: 32px; min-height: 18px;'
+        f'background: {SURFACE}; border: 1px solid #45475a; border-radius: 3px;'
+        f' padding: 2px 4px; color: {TEXT}; font-size: 11px;'
+        ' min-width: 34px; min-height: 21px;'
     )
     BTN_STYLE_ON = (
-        f'background: {ACCENT}; border: 1px solid {ACCENT}; border-radius: 2px;'
-        f' padding: 1px; color: {BASE}; font-weight: bold; font-size: 10px;'
-        ' min-width: 24px; max-width: 32px; min-height: 18px;'
+        f'background: {ACCENT}; border: 1px solid {ACCENT}; border-radius: 3px;'
+        f' padding: 2px 4px; color: {BASE}; font-weight: bold; font-size: 11px;'
+        ' min-width: 34px; min-height: 21px;'
     )
 
     # Pixel height of the spacer row that visually separates the bottom
@@ -328,42 +338,42 @@ class LDCSelectorWidget(QWidget):
     GAP_ROW_HEIGHT = 12
 
     def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
+        super().__init__('LDC Selection', parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
-        # ── Header row: title + bulk action buttons ──────────────
+        # ── Bulk action buttons ───────────────────────────────────
         header = QHBoxLayout()
-        header.addWidget(QLabel('LDC Selection'))
+        header.setSpacing(8)
         self.select_all_btn = QPushButton('All')
-        self.select_all_btn.setFixedWidth(50)
+        self.select_all_btn.setMinimumHeight(26)
         self.select_all_btn.clicked.connect(self._select_all)
         self.clear_btn = QPushButton('Clear')
-        self.clear_btn.setFixedWidth(50)
+        self.clear_btn.setMinimumHeight(26)
         self.clear_btn.clicked.connect(self._clear_all)
-        header.addStretch()
-        header.addWidget(self.select_all_btn)
-        header.addWidget(self.clear_btn)
+        header.addWidget(self.select_all_btn, 1)
+        header.addWidget(self.clear_btn, 1)
         layout.addLayout(header)
 
         # ── Two boards side by side, each as a 2-column vertical grid ──
         boards_row = QHBoxLayout()
-        boards_row.setSpacing(14)
+        boards_row.setSpacing(22)
 
         self._buttons: dict[int, QPushButton] = {}  # 0-based index → button
         self._selected: set[int] = set()
 
         for board_idx in range(2):
             board_box = QVBoxLayout()
-            board_box.setSpacing(2)
+            board_box.setSpacing(3)
             lbl = QLabel(f'Board {board_idx + 1}')
             lbl.setStyleSheet(f'color: {ACCENT}; font-weight: bold; font-size: 11px;')
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             board_box.addWidget(lbl)
 
             grid = QGridLayout()
-            grid.setSpacing(2)
+            grid.setHorizontalSpacing(4)
+            grid.setVerticalSpacing(2)
             offset = board_idx * 32
 
             # Top half: 8 rows, top-down. Row r holds LDC (18+2r) on the
@@ -386,7 +396,7 @@ class LDCSelectorWidget(QWidget):
                 self._add_button(grid, 9 + r, 1, offset + (1 + 2 * r) - 1, offset + 1 + 2 * r)
 
             board_box.addLayout(grid)
-            boards_row.addLayout(board_box)
+            boards_row.addLayout(board_box, 1)
 
         layout.addLayout(boards_row)
         layout.addStretch()
@@ -402,6 +412,7 @@ class LDCSelectorWidget(QWidget):
         btn = QPushButton(str(label_1based))
         btn.setStyleSheet(self.BTN_STYLE_OFF)
         btn.setCheckable(True)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         btn.clicked.connect(lambda checked, idx=idx_0based: self._toggle(idx))
         grid.addWidget(btn, row, col)
         self._buttons[idx_0based] = btn
@@ -589,6 +600,11 @@ class SettingsPanel(QGroupBox):
     def __init__(self, parent: QWidget | None = None):
         super().__init__('Settings', parent)
         layout = QGridLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(10)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 1)
 
         # ── Network ──────────────────────────────────────────────
         layout.addWidget(QLabel('UDP Port:'), 0, 0)
@@ -623,14 +639,17 @@ class SettingsPanel(QGroupBox):
 
         # ── Connection / dummy / clear ───────────────────────────
         self.dummy_btn = QPushButton('Start Dummy Data')
+        self.dummy_btn.setMinimumHeight(30)
         self.dummy_btn.setStyleSheet(f'border-color: {YELLOW};')
         layout.addWidget(self.dummy_btn, 5, 0, 1, 2)
 
         self.connect_btn = QPushButton('Connect UDP')
+        self.connect_btn.setMinimumHeight(30)
         self.connect_btn.setStyleSheet(f'border-color: {GREEN};')
         layout.addWidget(self.connect_btn, 6, 0, 1, 2)
 
         self.clear_btn = QPushButton('Clear Buffer')
+        self.clear_btn.setMinimumHeight(30)
         layout.addWidget(self.clear_btn, 7, 0, 1, 2)
 
         # ── Sliding window (drives plots, heatmap, recording) ────
@@ -664,6 +683,7 @@ class SettingsPanel(QGroupBox):
 
         # ── Recording ────────────────────────────────────────────
         self.record_btn = QPushButton('Start Recording')
+        self.record_btn.setMinimumHeight(30)
         self.record_btn.setStyleSheet(f'border-color: {RED};')
         layout.addWidget(self.record_btn, 11, 0, 1, 2)
 
@@ -674,6 +694,7 @@ class SettingsPanel(QGroupBox):
 
         # ── Heatmap baseline recalibration ───────────────────────
         self.calibrate_btn = QPushButton('Calibrate Heatmap Baseline')
+        self.calibrate_btn.setMinimumHeight(30)
         self.calibrate_btn.setStyleSheet(f'border-color: {ACCENT};')
         self.calibrate_btn.setToolTip(
             'Snapshot current per-coil readings as the "no metal" baseline.\n'
@@ -716,7 +737,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        # ── Left column: logo + settings panel ───────────────────
+        # ── Left column: logo, then settings + selector side by side ──
         left = QVBoxLayout()
 
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -724,21 +745,30 @@ class MainWindow(QMainWindow):
         logo_label = QLabel()
         logo_pixmap = QPixmap(logo_path)
         logo_label.setPixmap(
-            logo_pixmap.scaledToWidth(200, Qt.TransformationMode.SmoothTransformation)
+            logo_pixmap.scaledToWidth(170, Qt.TransformationMode.SmoothTransformation)
         )
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         left.addWidget(logo_label)
 
+        # Settings and LDC selector side by side, equal width
+        panels_row = QHBoxLayout()
+        panels_row.setSpacing(10)
+
         self.settings = SettingsPanel()
-        left.addWidget(self.settings)
+        self.settings.setMinimumWidth(270)
+        self.settings.setMaximumWidth(300)
+        panels_row.addWidget(self.settings)
+
+        self.ldc_selector = LDCSelectorWidget()
+        self.ldc_selector.setMinimumWidth(270)
+        self.ldc_selector.setMaximumWidth(300)
+        panels_row.addWidget(self.ldc_selector)
+
+        left.addLayout(panels_row)
         left.addStretch()
         left_widget = QWidget()
         left_widget.setLayout(left)
-        left_widget.setMaximumWidth(240)
-
-        # ── Middle column: vertical LDC selector (mirrors PCB layout) ──
-        self.ldc_selector = LDCSelectorWidget()
-        self.ldc_selector.setMaximumWidth(200)
+        left_widget.setMaximumWidth(630)
 
         # ── Right column: tabbed plots ──────────────────────────
         self.tabs = QTabWidget()
@@ -749,11 +779,9 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_widget)
-        splitter.addWidget(self.ldc_selector)
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 0)
-        splitter.setStretchFactor(2, 5)
+        splitter.setStretchFactor(1, 5)
         root.addWidget(splitter)
 
         # ── Status bar ───────────────────────────────────────────
