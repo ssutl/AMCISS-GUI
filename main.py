@@ -22,12 +22,12 @@ operators can capture a CSV for offline analysis.
 
 Layout
 ------
-  ┌──────────┬──────────┬──────────────────────────────────┐
-  │  logo    │  LDC     │  Tab 1: LDC traces               │
-  │  settings│  selector│  Tab 2: heatmap                  │
-  │  controls│  (2      │       (physical position ×       │
-  │          │  boards) │        distance)                 │
-  └──────────┴──────────┴──────────────────────────────────┘
+  ┌──────────┬──────────────────────────────────────────────┐
+  │  logo    │  Tab 1: LDC selection (2+ boards)            │
+  │  settings│  Tab 2: LDC traces                           │
+  │  controls│  Tab 3: heatmap                              │
+  │          │       (physical position × distance)         │
+  └──────────┴──────────────────────────────────────────────┘
   status bar: connection state, packets, dropped, buffer size
 
 Physical LDC layout (see README for the full diagram)
@@ -737,7 +737,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        # ── Left column: logo, then settings + selector side by side ──
+        # ── Left column: logo, then settings ─────────────────────
         left = QVBoxLayout()
 
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -750,30 +750,22 @@ class MainWindow(QMainWindow):
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         left.addWidget(logo_label)
 
-        # Settings and LDC selector side by side, equal width
-        panels_row = QHBoxLayout()
-        panels_row.setSpacing(10)
-
         self.settings = SettingsPanel()
         self.settings.setMinimumWidth(270)
-        self.settings.setMaximumWidth(300)
-        panels_row.addWidget(self.settings)
+        self.settings.setMaximumWidth(320)
+        left.addWidget(self.settings)
 
-        self.ldc_selector = LDCSelectorWidget()
-        self.ldc_selector.setMinimumWidth(270)
-        self.ldc_selector.setMaximumWidth(300)
-        panels_row.addWidget(self.ldc_selector)
-
-        left.addLayout(panels_row)
         left.addStretch()
         left_widget = QWidget()
         left_widget.setLayout(left)
-        left_widget.setMaximumWidth(630)
+        left_widget.setMaximumWidth(340)
 
-        # ── Right column: tabbed plots ──────────────────────────
+        # ── Right column: tabbed views ──────────────────────────
         self.tabs = QTabWidget()
+        self.ldc_selector = LDCSelectorWidget()
         self.single_ldc = SingleLDCWidget(self.ldc_selector)
         self.heatmap = HeatmapWidget()
+        self.tabs.addTab(self.ldc_selector, '☷  LDC Selection')
         self.tabs.addTab(self.single_ldc, '📈  LDC Traces')
         self.tabs.addTab(self.heatmap, '🌡  Heatmap')
 
